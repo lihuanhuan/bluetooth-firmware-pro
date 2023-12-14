@@ -49,9 +49,9 @@ jobs:
         uses: onekeyhq/actions/notice-slack-app-update@main
         with:
           web-hook-url: ${{ secrets.SLACK_DEV_RELEASE_WEBHOOK }}
-          artifact-type: TOUCH-FIRMWARE-BT
-          artifact-name: Touch-Hardware-Firmware-BT
-          artifact-bundle-id: "so.onekey.firmware.touch.bt"
+          artifact-type: PRO-FIRMWARE-BT
+          artifact-name: Pro-Hardware-Firmware-BT
+          artifact-bundle-id: "so.onekey.firmware.pro.bt"
           artifact-version-name: "${{ steps.vars.outputs.fw_revision }}"
           artifact-version-code: "${{ steps.vars.outputs.short_hash }}"
           artifact-download-url: "${{ steps.vars.outputs.artifacts_url }}"

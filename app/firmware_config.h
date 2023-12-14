@@ -2,8 +2,8 @@
 #define FIRMWARE_CONFIG
 
 #define MANUFACTURER_NAME               "OneKey"                                     /**< Manufacturer. Will be passed to Device Information Service. */
-#define ADV_HEAD_NAME                   "Touch "
-#define MODEL_NUMBER                    "Touch"                                       /**< Model Number string. Will be passed to Device Information Service. */
+#define ADV_HEAD_NAME                   "Pro "
+#define MODEL_NUMBER                    "Pro"                                       /**< Model Number string. Will be passed to Device Information Service. */
 #define MANUFACTURER_ID                 0x55AA55AA55                                /**< DUMMY Manufacturer ID. Will be passed to Device Information Service. You shall use the ID for your Company*/
 #define ORG_UNIQUE_ID                   0xEEBBEE                                    /**< DUMMY Organisation Unique ID. Will be passed to Device Information Service. You shall use the Organisation Unique ID relevant for your Company */
 #define HW_REVISION                     "1.0.0"

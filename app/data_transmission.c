@@ -18,10 +18,10 @@ void usr_spim_init(void)
     ret_code_t err_code;
 
     nrfx_spim_config_t  driver_spi_config = NRFX_SPIM_DEFAULT_CONFIG;
-    driver_spi_config.ss_pin   = TOUCH_SPI2_CSN_IO;
-    driver_spi_config.miso_pin = TOUCH_SPI2_MISO_IO;
-    driver_spi_config.mosi_pin = TOUCH_SPI2_MOSI_IO;
-    driver_spi_config.sck_pin = TOUCH_SPI2_CLK_IO;
+    driver_spi_config.ss_pin   = STM32_SPI2_CSN_IO;
+    driver_spi_config.miso_pin = STM32_SPI2_MISO_IO;
+    driver_spi_config.mosi_pin = STM32_SPI2_MOSI_IO;
+    driver_spi_config.sck_pin = STM32_SPI2_CLK_IO;
     driver_spi_config.frequency = NRF_SPIM_FREQ_4M;
     err_code = nrfx_spim_init(&m_spim_master, &driver_spi_config, NULL, NULL);
     APP_ERROR_CHECK(err_code);
