@@ -2125,17 +2125,32 @@ void in_gpiote_handler(nrf_drv_gpiote_pin_t pin, nrf_gpiote_polarity_t action)
                 send_stm_data(bak_buff,3);     
                 //NRF_LOG_INFO("charge_status  = %d", g_charge_status);
                 //NRF_LOG_INFO("charge_type  = %d", get_charge_type());                
-            }                     
-            g_key_status = get_irq_status();
-                    
-            if((g_key_status == 0x01)||(g_key_status == 0x02))
-            {
+            }  
+            // AXP interrupt processing logic
+            uint8_t irq_req_value = get_irq_status();
+            if ((irq_req_value & IRQ_SHORT_PRESS) == IRQ_SHORT_PRESS) {    // SHORT (Short press trigger)
                 bak_buff[0] = BLE_CMD_KEY_STA;
-                bak_buff[1] = g_key_status;
-                send_stm_data(bak_buff,2); 
-            }
-            clear_irq_reg();
+                bak_buff[1] = 0x01;
+                send_stm_data(bak_buff, 2);
+               }
+            if ((irq_req_value & IRQ_LONG_PRESS) == IRQ_LONG_PRESS) {      // LONG (Long  press trigger)
+                bak_buff[0] = BLE_CMD_KEY_STA;
+                bak_buff[1] = 0x02;
+                send_stm_data(bak_buff, 2);
+               }
+            if ((irq_req_value & IRQ_FALLING_EDGE) == IRQ_FALLING_EDGE) {  // FALLING (Press trigger)
+                bak_buff[0] = BLE_CMD_KEY_STA;
+                bak_buff[1] = 0x20;  
+                send_stm_data(bak_buff, 2);
+               }
+            if ((irq_req_value & IRQ_RISING_EDGE) == IRQ_RISING_EDGE) {    // RISING (Release trigger)
+                bak_buff[0] = BLE_CMD_KEY_STA;
+                bak_buff[1] = 0x40;
+                send_stm_data(bak_buff, 2);
+               }
+            clear_irq_reg(); //clear irq
             break;
+ 
         default:
             break;
     }
@@ -2593,6 +2608,8 @@ static void bat_msg_report_process(void *p_event_data,uint16_t event_size)
         bat_msg_flag = BAT_DEF; 
     }
 }
+
+
 
 
 static void scheduler_init(void)

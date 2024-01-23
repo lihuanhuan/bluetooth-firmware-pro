@@ -195,28 +195,13 @@ uint8_t get_irq_battery_status(void)
         return 0;
     }
 }
-//REG 4CH
+
+//REG 4CH  
 uint8_t get_irq_status(void)
 {
-    uint8_t key_status = 0,reg = 0;
-
-    axp216_read(AXP_INTSTS5,1,&reg);
-    NRF_LOG_INFO("key status %d ",reg);
-    if((reg & IRQ_SHORT_PRESS) == IRQ_SHORT_PRESS){
-        key_status = 0x01;
-    }else if((reg & IRQ_LONG_PRESS) == IRQ_LONG_PRESS){
-        key_status = 0x02;
-    }else if((reg & IRQ_OFF_LEVEL) == IRQ_OFF_LEVEL){
-        return IRQ_OFF_LEVEL;
-    }
-
-    if(key_status != 0)
-    {
-        return key_status;
-    }else
-    {
-        return 0;
-    }
+    uint8_t  reg = 0;
+    axp216_read(AXP_INTSTS5, 1, &reg); 
+    return reg; 
 }
 
 
@@ -229,6 +214,8 @@ void get_battery_cv_msg(uint8_t bat_reg_addr,uint8_t bat_value[2])
     bat_value[0] = val[0];
     bat_value[1] = val[1];
 }
+
+
 
 
 void set_wakeup_irq(uint8_t set_value)

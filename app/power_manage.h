@@ -29,6 +29,10 @@
 #define IRQ_SHORT_PRESS  0x10
 #define IRQ_LONG_PRESS   0x08
 #define IRQ_OFF_LEVEL    0x04
+#define IRQ_RISING_EDGE  0x40
+#define IRQ_FALLING_EDGE 0x20
+
+
 
 #define AXP_CLOSE_EMMC   0x00
 #define AXP_OPEN_EMMC    0x20
@@ -57,6 +61,7 @@ extern uint8_t get_irq_vbus_status(void);
 extern uint8_t get_irq_charge_status(void);
 
 extern uint8_t get_irq_battery_status(void);
+
 
 extern uint8_t get_irq_status(void);
 
