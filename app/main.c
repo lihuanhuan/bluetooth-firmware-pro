@@ -275,6 +275,8 @@
 #define ST_SEND_OPEN_EMMC_PWR  0x03
 #define ST_REQ_POWER_PERCENT   0x04
 #define ST_REQ_USB_STATUS      0x05
+#define ST_REQ_ENABLE_CHARGE   0x06
+#define ST_REQ_DISABLE_CHARGE  0x07
 //
 #define ST_CMD_BLE_INFO       0x83
 #define ST_REQ_ADV_NAME       0x01
@@ -1703,6 +1705,12 @@ void uart_event_handle(app_uart_evt_t* p_event)
                 case ST_REQ_USB_STATUS:
                     pwr_status_flag = PWR_USB_STATUS;
                     break;
+                case ST_REQ_ENABLE_CHARGE:
+                    pmu_p->SetFeature(PWR_FEAT_CHARGE, true); // enable charge
+                    break;
+                case ST_REQ_DISABLE_CHARGE:
+                    pmu_p->SetFeature(PWR_FEAT_CHARGE, false); // disable charge
+                    break;
                 default:
                     pwr_status_flag = PWR_DEF;
                     break;
@@ -2395,14 +2403,16 @@ static void ble_ctl_process(void* p_event_data, uint16_t event_size)
     case PWR_USB_STATUS:
         pwr_status_flag = PWR_DEF;
         bak_buff[0] = BLE_CMD_POWER_STA;
-        bak_buff[1] = pmu_status.chargerAvailable;
-        if ( pmu_status.wiredCharge )
+
+        if ( pmu_status.chargerAvailable )
         {
-            bak_buff[2] = AXP_CHARGE_TYPE_USB;
+            bak_buff[1] = ((pmu_status.chargeFinished && pmu_status.chargeAllowed) ? BLE_CHAGE_OVER : BLE_CHARGING_PWR);
+            bak_buff[2] = (pmu_status.wiredCharge ? AXP_CHARGE_TYPE_USB : AXP_CHARGE_TYPE_WIRELESS);
         }
         else
         {
-            bak_buff[2] = AXP_CHARGE_TYPE_WIRELESS;
+            bak_buff[1] = BLE_REMOVE_POWER;
+            bak_buff[2] = 0;
         }
         send_stm_data(bak_buff, 3);
         pwr_status_flag = PWR_DEF;
@@ -2554,6 +2564,8 @@ int main(void)
             enter_low_power_mode(); // something wrong, shutdown to prevent battery drain
         }
     );
+    // soft power off ST until self init done
+    // pmu_p->SetState(PWR_STATE_SOFT_OFF);
     // device config init
     EXEC_RETRY(
         3, {}, { return device_config_init(); },
