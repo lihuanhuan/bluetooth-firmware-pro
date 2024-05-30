@@ -1,9 +1,12 @@
 cmake_minimum_required(VERSION 3.22.1)
 
+if(NOT DEFINED ${CMAKE_BUILD_TYPE})
+  set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
+endif()
+
 ###############################
 # Toolchain
 include("./toolchain.cmake")
-
 
 ###############################
 # Project
@@ -71,9 +74,11 @@ include(ExternalProject)
 # dfu
 ExternalProject_Add(
   dfu
-  SOURCE_DIR ${PROJECT_SOURCE_DIR}/dfu
+  # SOURCE_DIR ${PROJECT_SOURCE_DIR}/dfu # use legacy for now
+  SOURCE_DIR ${PROJECT_SOURCE_DIR}/dfu_legacy
   INSTALL_DIR ${PROJECT_SOURCE_DIR}/artifacts
   CMAKE_GENERATOR "Ninja"
+  CMAKE_ARGS "-DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}"
   CMAKE_ARGS "-DTOOL_CHAIN_PREFIX=${TOOL_CHAIN_PREFIX} "
   CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX:STRING=${PROJECT_SOURCE_DIR}/artifacts " 
 )
@@ -98,6 +103,7 @@ ExternalProject_Add(
   SOURCE_DIR ${PROJECT_SOURCE_DIR}/app
   INSTALL_DIR ${PROJECT_SOURCE_DIR}/artifacts
   CMAKE_GENERATOR "Ninja"
+  CMAKE_ARGS "-DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}"
   CMAKE_ARGS "-DTOOL_CHAIN_PREFIX=${TOOL_CHAIN_PREFIX} "
   CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX:STRING=${PROJECT_SOURCE_DIR}/artifacts "
   DEPENDS ${CMAKE_PROJECT_NAME}_DFU_UPGRADE_PAYLOAD
