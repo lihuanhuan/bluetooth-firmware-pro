@@ -371,7 +371,7 @@ Power_Error_t axp2101_pull_status(void)
         hlbuff.u8_high &= 0b00111111; // drop bit 7:6
         EC_E_BOOL_R_PWR_ERR(axp2101_reg_read(AXP2101_TS_L, &(hlbuff.u8_low)));
         status_temp.batteryTemp =
-            ntc_temp_cal_cv(NTC_Char_NCP15XH103F03RC_2585, 40, ((hlbuff.u16 * 0.5) * 0.8 + 0) * 1000); // temp_c
+            ntc_temp_cal_cv(NTC_Char_NCP15XH103F03RC_2585, 40, (hlbuff.u16 * 0.5) * 1000); // temp_c
     }
     else
     {
@@ -401,14 +401,12 @@ Power_Error_t axp2101_pull_status(void)
         // read gpio
         bool gpio_high_low = true;
         EC_E_BOOL_R_PWR_ERR(pmu_interface_p->GPIO.Config(8, PWR_GPIO_Config_READ_PH));
-        pmu_interface_p->Delay_ms(5);
+        pmu_interface_p->Delay_ms(10);
         EC_E_BOOL_R_PWR_ERR(pmu_interface_p->GPIO.Read(8, &gpio_high_low));
         EC_E_BOOL_R_PWR_ERR(pmu_interface_p->GPIO.Config(8, PWR_GPIO_Config_UNUSED));
 
+        status_temp.wiredCharge = gpio_high_low;
         status_temp.wirelessCharge = !gpio_high_low; // low is wireless
-
-        // if not wireless charging then it's wired
-        status_temp.wiredCharge = !status_temp.wirelessCharge;
 
         // wireless charge current limit to 300ma
         EC_E_BOOL_R_PWR_ERR(axp2101_charge_current_sel(status_temp.wirelessCharge));
