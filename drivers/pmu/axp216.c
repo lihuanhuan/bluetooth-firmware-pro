@@ -28,6 +28,9 @@ static bool axp216_config_voltage(void)
     // DCDC1 -> MAIN 3.3V
     EC_E_BOOL_R_BOOL(axp216_reg_write(AXP216_DC1OUT_VOL, 0x11));
 
+    // minimal vsys voltage -> 2.6V
+    EC_E_BOOL_R_BOOL(axp216_clr_bits(AXP216_VOFF_SET, 0b00000111));
+
     return true;
 }
 
@@ -60,13 +63,13 @@ static bool axp216_config_battery(void)
     // temp formula
     // V = reg_val * 0x10 * 0.0008V
     // charge temp max
-    EC_E_BOOL_R_BOOL(axp216_reg_write(AXP216_VHTF_CHG, (uint8_t)(AXP216_VTS_TO_VXTF(196.96)))); // 196.96mv
+    EC_E_BOOL_R_BOOL(axp216_reg_write(AXP216_VHTF_CHG, (uint8_t)(AXP216_VTS_TO_VXTF(193.9))));
     // charge temp min
-    EC_E_BOOL_R_BOOL(axp216_reg_write(AXP216_VLTF_CHG, (uint8_t)(AXP216_VTS_TO_VXTF(711.2)))); // 711.2mv
+    EC_E_BOOL_R_BOOL(axp216_reg_write(AXP216_VLTF_CHG, (uint8_t)(AXP216_VTS_TO_VXTF(736.3))));
     // discharge temp max
-    EC_E_BOOL_R_BOOL(axp216_reg_write(AXP216_VHTF_DISCHG, (uint8_t)(AXP216_VTS_TO_VXTF(121.28)))); // 121.28mv
+    EC_E_BOOL_R_BOOL(axp216_reg_write(AXP216_VHTF_DISCHG, (uint8_t)(AXP216_VTS_TO_VXTF(119.3))));
     // discharge temp min
-    EC_E_BOOL_R_BOOL(axp216_reg_write(AXP216_VLTF_DISCHG, (uint8_t)(AXP216_VTS_TO_VXTF(2520)))); // 2520mv
+    EC_E_BOOL_R_BOOL(axp216_reg_write(AXP216_VLTF_DISCHG, (uint8_t)(AXP216_VTS_TO_VXTF(3099))));
 
     return true;
 }
@@ -115,8 +118,6 @@ static bool axp216_config_common(void)
     EC_E_BOOL_R_BOOL(axp216_reg_write(AXP216_OFF_CTL, 0x48));
     // 16s key press force reboot, die ovtmp off, no irq turn on
     EC_E_BOOL_R_BOOL(axp216_reg_write(AXP216_HOTOVER_CTL, 0x0f));
-    // voff(ipsout/vsys) 3.3v, no irq wakeup
-    EC_E_BOOL_R_BOOL(axp216_reg_write(AXP216_VOFF_SET, 0x07));
 
     return true;
 }
@@ -168,9 +169,20 @@ Power_Error_t axp216_deinit(void)
     return PWR_ERROR_NONE;
 }
 
-Power_Error_t axp216_reset(void)
+Power_Error_t axp216_reset(bool hard_reset)
 {
-    EC_E_BOOL_R_PWR_ERR(axp216_set_bits(AXP216_VOFF_SET, (1 << 6)));
+    if ( !hard_reset )
+    {
+        EC_E_BOOL_R_PWR_ERR(axp216_set_bits(AXP216_VOFF_SET, (1 << 6)));
+    }
+    else
+    {
+        // pmu force reset by pull down pwrok
+        pmu_interface_p->GPIO.Config(7, PWR_GPIO_Config_WRITE_NP);
+        pmu_interface_p->GPIO.Write(7, false);
+        pmu_interface_p->Delay_ms(100);
+        pmu_interface_p->GPIO.Config(7, PWR_GPIO_Config_DEFAULT);
+    }
 
     return PWR_ERROR_NONE;
 }
@@ -311,6 +323,9 @@ Power_Error_t axp216_pull_status(void)
     HL_Buff hlbuff;
 
     Power_Status_t status_temp = {0};
+
+    // sys voltage (not supported by axp216, set to zero)
+    status_temp.sysVoltage = 0;
 
     // battery present
     hlbuff.u8_high = 0;

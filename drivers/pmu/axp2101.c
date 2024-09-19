@@ -24,6 +24,11 @@ static bool axp2101_config_voltage(void)
     // DCDC1 -> RAIL_3V3 3.3V
     EC_E_BOOL_R_BOOL(axp2101_reg_write(AXP2101_DCDC1_CFG, 0x12));
 
+    // minimal vsys voltage -> 2.6V
+    // there is a silicon logic bug for axp2101, batfet won't be closed if powered on by key, even if vsys is lower than
+    // VOFF_THLD
+    EC_E_BOOL_R_BOOL(axp2101_reg_write(AXP2101_VOFF_THLD, 0x00));
+
     return true;
 }
 
@@ -92,8 +97,8 @@ static bool axp2101_config_battery_param(void)
     return true;
 }
 
-#define AXP2101_VTS_TO_VHTF(mv) (mv / 32)
-#define AXP2101_VTS_TO_VLTF(mv) (mv / 2)
+#define AXP2101_VTS_TO_VHTF(mv) (mv / 2)
+#define AXP2101_VTS_TO_VLTF(mv) (mv / 32)
 static bool axp2101_config_battery(void)
 {
     // warn level
@@ -116,16 +121,16 @@ static bool axp2101_config_battery(void)
     // Vl = reg_val * 2mv
 
     // charge temp max
-    EC_E_BOOL_R_BOOL(axp2101_reg_write(AXP2101_VHTF_CHG, (uint8_t)(AXP2101_VTS_TO_VHTF(196.96)))); // 196.96mv
+    EC_E_BOOL_R_BOOL(axp2101_reg_write(AXP2101_VHTF_CHG, (uint8_t)(AXP2101_VTS_TO_VHTF(193.9))));
 
     // charge temp min
-    EC_E_BOOL_R_BOOL(axp2101_reg_write(AXP2101_VLTF_CHG, (uint8_t)(AXP2101_VTS_TO_VLTF(711.2)))); // 711.2mv
+    EC_E_BOOL_R_BOOL(axp2101_reg_write(AXP2101_VLTF_CHG, (uint8_t)(AXP2101_VTS_TO_VLTF(736.3))));
 
     // discharge temp max
-    EC_E_BOOL_R_BOOL(axp2101_reg_write(AXP2101_VHTF_DISCHG, (uint8_t)(AXP2101_VTS_TO_VHTF(121.28)))); // 121.28mv
+    EC_E_BOOL_R_BOOL(axp2101_reg_write(AXP2101_VHTF_DISCHG, (uint8_t)(AXP2101_VTS_TO_VHTF(119.3))));
 
     // discharge temp min
-    EC_E_BOOL_R_BOOL(axp2101_reg_write(AXP2101_VLTF_DISCHG, (uint8_t)(AXP2101_VTS_TO_VLTF(2520)))); // 2520mv
+    EC_E_BOOL_R_BOOL(axp2101_reg_write(AXP2101_VLTF_DISCHG, (uint8_t)(AXP2101_VTS_TO_VLTF(3099))));
 
     return true;
 }
@@ -220,9 +225,21 @@ Power_Error_t axp2101_deinit(void)
     return PWR_ERROR_NONE;
 }
 
-Power_Error_t axp2101_reset(void)
+Power_Error_t axp2101_reset(bool hard_reset)
 {
-    EC_E_BOOL_R_PWR_ERR(axp2101_set_bits(AXP2101_COMM_CFG, (1 << 1)));
+    if ( !hard_reset )
+    {
+        EC_E_BOOL_R_PWR_ERR(axp2101_set_bits(AXP2101_COMM_CFG, (1 << 1)));
+    }
+    else
+    {
+        // pmu force reset by pull down pwrok
+        pmu_interface_p->GPIO.Config(7, PWR_GPIO_Config_WRITE_NP);
+        pmu_interface_p->GPIO.Write(7, false);
+        pmu_interface_p->Delay_ms(100);
+        pmu_interface_p->GPIO.Config(7, PWR_GPIO_Config_DEFAULT);
+    }
+
     return PWR_ERROR_NONE;
 }
 
@@ -347,6 +364,12 @@ Power_Error_t axp2101_pull_status(void)
     HL_Buff hlbuff;
 
     Power_Status_t status_temp = {0};
+
+    // sys voltage
+    EC_E_BOOL_R_PWR_ERR(axp2101_reg_read(AXP2101_VSYS_H, &(hlbuff.u8_high)));
+    hlbuff.u8_high &= 0b00111111; // drop bit 7:6
+    EC_E_BOOL_R_PWR_ERR(axp2101_reg_read(AXP2101_VSYS_L, &(hlbuff.u8_low)));
+    status_temp.sysVoltage = hlbuff.u16;
 
     // battery present
     hlbuff.u8_high = 0;

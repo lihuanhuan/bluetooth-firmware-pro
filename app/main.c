@@ -459,12 +459,6 @@ static bool app_shutdown_handler(nrf_pwr_mgmt_evt_t event)
     switch ( event )
     {
     case NRF_PWR_MGMT_EVT_PREPARE_WAKEUP:
-        // stop bt adv
-        if ( nrf_sdh_is_enabled() )
-        {
-            if ( !bt_advertising_ctrl(false, false) )
-                return false;
-        }
         // enable wakeup
         nrf_gpio_cfg_sense_input(PMIC_PWROK_IO, NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_SENSE_HIGH);
         // nrf_gpio_cfg_sense_input(PMIC_IRQ_IO, NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_SENSE_HIGH);
@@ -480,23 +474,6 @@ static bool app_shutdown_handler(nrf_pwr_mgmt_evt_t event)
     }
 }
 NRF_PWR_MGMT_HANDLER_REGISTER(app_shutdown_handler, 0);
-
-static void buttonless_dfu_sdh_state_observer(nrf_sdh_state_evt_t state, void* p_context)
-{
-    if ( state == NRF_SDH_EVT_STATE_DISABLED )
-    {
-        // Softdevice was disabled before going into reset. Inform bootloader to skip CRC on next boot.
-        nrf_power_gpregret2_set(BOOTLOADER_DFU_SKIP_CRC);
-
-        // Go to system off.
-        nrf_pwr_mgmt_shutdown(NRF_PWR_MGMT_SHUTDOWN_GOTO_SYSOFF);
-    }
-}
-
-/* nrf_sdh state observer. */
-NRF_SDH_STATE_OBSERVER(m_buttonless_dfu_state_obs, 0) = {
-    .handler = buttonless_dfu_sdh_state_observer,
-};
 
 /**@brief Function for assert macro callback.
  *
@@ -521,17 +498,51 @@ static inline void gpio_uninit(void)
 
 static void enter_low_power_mode(void)
 {
-    if ( (pmu_p != NULL) && (pmu_p->isInitialized) )
-        pmu_p->Deinit();
-    gpio_uninit();
-    nrf_gpio_cfg_default(ST_WAKE_IO);
+    // stop uart
     if ( app_uart_is_initialized )
     {
         app_uart_close();
         app_uart_is_initialized = false;
     }
+
+    // stop bt adv
+    if ( nrf_sdh_is_enabled() )
+    {
+        while ( !bt_advertising_ctrl(false, false) )
+        {
+            nrf_delay_ms(100);
+        }
+    }
+
+    // release pmu interface
+    if ( (pmu_p != NULL) && (pmu_p->isInitialized) )
+        pmu_p->Deinit();
+
+    // release gpio
+    gpio_uninit();
+    nrf_gpio_cfg_default(ST_WAKE_IO);
+
+    // shutdown
     nrf_pwr_mgmt_shutdown(NRF_PWR_MGMT_SHUTDOWN_GOTO_SYSOFF);
 }
+
+// sdh_soc_handler, mainly for power warning, no other event processed yet
+void sdh_soc_handler(uint32_t sys_evt, void* p_context)
+{
+    UNUSED_VAR(p_context);
+
+    if ( sys_evt == NRF_EVT_POWER_FAILURE_WARNING )
+    {
+        // nrf_gpio_cfg_output(PMIC_PWROK_IO);
+        // nrf_gpio_pin_clear(PMIC_PWROK_IO);
+        NRF_LOG_INFO("NRF Power POF triggered!");
+        NRF_LOG_FLUSH();
+
+        pmu_p->SetState(PWR_STATE_HARD_OFF);
+        enter_low_power_mode();
+    }
+}
+NRF_SDH_SOC_OBSERVER(m_soc_observer, 0, sdh_soc_handler, NULL);
 
 void battery_level_meas_timeout_handler(void* p_context)
 {
@@ -2235,6 +2246,7 @@ static inline void pmu_status_print()
 {
     NRF_LOG_INFO("=== PowerStatus ===");
     NRF_LOG_INFO("PMIC_IRQ_IO -> %s", (nrf_gpio_pin_read(PMIC_IRQ_IO) ? "HIGH" : "LOW"));
+    NRF_LOG_INFO("sysVoltage=%lu", pmu_p->PowerStatus->sysVoltage);
     NRF_LOG_INFO("batteryPresent=%u", pmu_p->PowerStatus->batteryPresent);
     NRF_LOG_INFO("batteryPercent=%u", pmu_p->PowerStatus->batteryPercent);
     NRF_LOG_INFO("batteryVoltage=%lu", pmu_p->PowerStatus->batteryVoltage);
@@ -2344,6 +2356,56 @@ static void pmu_irq_pull(void* p_event_data, uint16_t event_size)
         pmu_status_synced = true;
         pmu_status_print();
         pmu_p->Irq();
+    }
+}
+
+static void pmu_sys_voltage_monitor(void* p_event_data, uint16_t event_size)
+{
+    static uint8_t match_count = 0;
+    const uint8_t match_required = 30;
+    const uint16_t minimum_mv = 3300;
+
+    if ( (match_count < match_required) )
+    {
+        // not triggered
+        if ( pmu_p->PowerStatus->batteryVoltage < minimum_mv )
+        {
+            // voltage low
+            if ( pmu_p->PowerStatus->chargerAvailable )
+            {
+                // has charger, ignore
+                // NRF_LOG_INFO("Low batteryVoltage detect skiped since charger available");
+                // reset counter
+                match_count = 0;
+            }
+            else
+            {
+                // increase counter
+                match_count++;
+                NRF_LOG_INFO(
+                    "Low batteryVoltage debounce, match %u/%u (batteryVoltage=%lu)", match_count, match_required,
+                    pmu_p->PowerStatus->batteryVoltage
+                );
+            }
+        }
+        else
+        {
+            // voltage normal
+            if ( match_count > 0 )
+            {
+                // reset counter if not zero
+                match_count = 0;
+                NRF_LOG_INFO("Low batteryVoltage debounce, match reset");
+                NRF_LOG_FLUSH();
+            }
+        }
+    }
+    else
+    {
+        // already triggered
+        NRF_LOG_INFO("Low batteryVoltage debounce, match fulfilled, force shutdown pmu");
+        NRF_LOG_FLUSH();
+        pmu_p->SetState(PWR_STATE_HARD_OFF);
     }
 }
 
@@ -2535,6 +2597,25 @@ int main(void)
     ); // TODO: check return!
 
     // ###############################
+    // Power mode and warning (depends on SD, has to be here)
+    ExecuteCheck_ADV(sd_power_dcdc_mode_set(NRF_POWER_DCDC_ENABLE), NRF_SUCCESS, {
+        NRF_LOG_INFO("NRF Power enable DCDC failed");
+        NRF_LOG_FLUSH();
+        enter_low_power_mode();
+    });
+    ExecuteCheck_ADV(sd_power_pof_threshold_set(NRF_POWER_THRESHOLD_V28), NRF_SUCCESS, {
+        NRF_LOG_INFO("NRF Power set POF threadhold failed");
+        NRF_LOG_FLUSH();
+        enter_low_power_mode();
+    });
+    ExecuteCheck_ADV(sd_power_pof_enable(true), NRF_SUCCESS, {
+        NRF_LOG_INFO("NRF Power enable POF failed");
+        NRF_LOG_FLUSH();
+        enter_low_power_mode();
+    });
+    NRF_LOG_INFO("NRF Power configured");
+
+    // ###############################
     // Main Loop
     NRF_LOG_INFO("Main Loop Enter");
     NRF_LOG_FLUSH();
@@ -2542,6 +2623,7 @@ int main(void)
     for ( ;; )
     {
         // event trigger
+        app_sched_event_put(NULL, 0, pmu_sys_voltage_monitor);
         app_sched_event_put(NULL, 0, pmu_pwrok_pull);
         app_sched_event_put(NULL, 0, pmu_irq_pull);
         app_sched_event_put(NULL, 0, pmu_status_refresh);
