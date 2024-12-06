@@ -5,6 +5,7 @@ import hashlib
 import struct
 import zipfile
 import click
+import re
 
 # input_file = "../artifacts_signed/ota.zip"
 # output_file = "../artifacts_signed/ota.bin"
@@ -12,6 +13,9 @@ import click
 INIT_DATA_SIZE = 512
 
 OFFSET_MAGIC = 0x00
+OFFSET_VERSION_MAJOR = 0x10
+OFFSET_VERSION_MINOR = 0x11
+OFFSET_VERSION_PATCH = 0x12
 OFFSET_HASHES = 0x20
 OFFSET_NRF_DAT_SIZE = 0x400
 OFFSET_NRF_DAT = 0x404
@@ -50,10 +54,33 @@ def gen_hashes(data: bytes) -> bytes:
     return hashes
 
 def gen_onekey_bin(nrf_dat: bytes, nrf_bin: bytes) -> bytes:
+
+    header_file = "../app/firmware_config.h"
+
+    with open(header_file, "r") as file:
+        content = file.read()
+
+    match = re.search(r'#define\s+FW_REVISION\s+"([^"]+)"', content)
+
+    major = 0
+    minor = 0
+    patch = 0
+
+    if match:
+        version_string = match.group(1)
+        major, minor, patch = map(int, version_string.split('.'))
+
     buffer = io.BytesIO()
 
     buffer.seek(OFFSET_MAGIC, 0)
     buffer.write(b"5283")
+
+    buffer.seek(OFFSET_VERSION_MAJOR, 0)
+    buffer.write(struct.pack("B", major))
+    buffer.seek(OFFSET_VERSION_MINOR, 0)
+    buffer.write(struct.pack("B", minor))
+    buffer.seek(OFFSET_VERSION_PATCH, 0)
+    buffer.write(struct.pack("B", patch))
 
     buffer.seek(OFFSET_NRF_DAT_SIZE, 0)
     buffer.write(struct.pack("i", len(nrf_dat)))
