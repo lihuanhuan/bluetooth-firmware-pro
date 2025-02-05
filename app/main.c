@@ -61,6 +61,7 @@
 #include "ble_dis.h"
 #include "ble_hci.h"
 #include "ble_nus.h"
+#include "ble_fido.h"
 #include "nordic_common.h"
 #include "nrf.h"
 #include "nrf_ble_gatt.h"
@@ -155,10 +156,10 @@
 #define COMPANY_IDENTIFIER      0xFE
 
 // SCHEDULER CONFIGS
-#define SCHED_MAX_EVENT_DATA_SIZE   64 //!< Maximum size of the scheduler event data.
-#define SCHED_QUEUE_SIZE            20 //!< Size of the scheduler queue.
+#define SCHED_MAX_EVENT_DATA_SIZE   256 //!< Maximum size of the scheduler event data.
+#define SCHED_QUEUE_SIZE            4   //!< Size of the scheduler queue.
 
-#define RCV_DATA_TIMEOUT_INTERVAL   APP_TIMER_TICKS(100)
+#define RCV_DATA_TIMEOUT_INTERVAL   APP_TIMER_TICKS(1000)
 #define BATTERY_LEVEL_MEAS_INTERVAL APP_TIMER_TICKS(1000) /**< Battery level measurement interval (ticks). */
 #define BATTERY_MEAS_LONG_INTERVAL  APP_TIMER_TICKS(5000)
 
@@ -360,17 +361,16 @@
 
 BLE_NUS_DEF(m_nus, NRF_SDH_BLE_TOTAL_LINK_COUNT); /**< BLE NUS service instance. */
 BLE_BAS_DEF(m_bas);
+BLE_FIDO_DEF(m_fido, NRF_SDH_BLE_TOTAL_LINK_COUNT);
 NRF_BLE_GATT_DEF(m_gatt);           /**< GATT module instance. */
 NRF_BLE_QWR_DEF(m_qwr);             /**< Context for the Queued Write module.*/
 BLE_ADVERTISING_DEF(m_advertising); /**< Advertising module instance. */
 APP_TIMER_DEF(m_battery_timer_id);  /**< Battery timer. */
-APP_TIMER_DEF(m_100ms_timer_id);    /**< 100ms timer. */
+APP_TIMER_DEF(data_wait_timer_id);  /**< data wait timeout timer. */
 APP_TIMER_DEF(m_1s_timer_id);
 nrf_drv_wdt_channel_id m_channel_id;
 
 static volatile uint8_t one_second_counter = 0;
-static volatile uint8_t ble_evt_flag = BLE_DEFAULT;
-uint8_t spi_evt_flag = DEFAULT_FLAG;
 volatile uint8_t ble_adv_switch_flag = BLE_DEF;
 static volatile uint8_t ble_conn_flag = BLE_DEF;
 static volatile uint8_t ble_conn_nopair_flag = BLE_DEF;
@@ -403,9 +403,7 @@ static ble_uuid_t m_adv_uuids[] =                        /**< Universally unique
         {BLE_UUID_DEVICE_INFORMATION_SERVICE, BLE_UUID_TYPE_BLE},
 #endif
         {BLE_UUID_BATTERY_SERVICE, BLE_UUID_TYPE_BLE},
-        {BLE_UUID_NUS_SERVICE, BLE_UUID_TYPE_BLE}};
-
-void forwarding_to_st_data(void);
+        {BLE_UUID_FIDO_SERVICE, BLE_UUID_TYPE_BLE}};
 
 static volatile uint8_t flag_uart_trans = 1;
 static uint8_t uart_trans_buff[128];
@@ -417,11 +415,14 @@ static uint8_t calcXor(uint8_t* buf, uint8_t len);
 
 static bool bt_advertising_ctrl(bool enable, bool commit);
 static void idle_state_handle(void);
+void start_data_wait_timer(void);
 
 static uint8_t bond_check_key_flag = INIT_VALUE;
 static uint8_t rcv_head_flag = 0;
 static uint8_t ble_status_flag = 0;
-static bool ble_send_ready = false;
+
+static volatile uint16_t ble_nus_send_len = 0, ble_nus_send_offset = 0;
+static uint8_t* ble_nus_send_buf;
 
 // global vars
 static uint8_t g_bas_update_flag = 0;
@@ -565,57 +566,19 @@ void battery_level_meas_timeout_handler(void* p_context)
     }
 }
 
-void m_100ms_timeout_hander(void* p_context)
+void data_wait_timeout_hander(void* p_context)
 {
     UNUSED_PARAMETER(p_context);
 
-    static volatile uint8_t timeout_count = 0;
-    static volatile uint16_t timeout_longcnt = 0;
-
-    nrf_drv_wdt_channel_feed(m_channel_id);
-
-    if ( TIMER_RESET_FLAG == ble_trans_timer_flag )
-    {
-        timeout_longcnt = 0;
-        timeout_count = 1;
-        ble_trans_timer_flag = TIMER_INIT_FLAG;
-        NRF_LOG_INFO("1-timer reset.");
-    }
-    else if ( TIMER_START_FLAG == ble_trans_timer_flag )
-    {
-        timeout_count = 0;
-        timeout_longcnt = 1;
-        ble_trans_timer_flag = TIMER_INIT_FLAG;
-        NRF_LOG_INFO("2-timer start.");
-    }
-
-    if ( timeout_count >= 1 )
-    {
-        timeout_count++;
-        if ( timeout_count >= 20 )
-        {
-            NRF_LOG_INFO("1-timer timeout.");
-            timeout_count = 0;
-            ble_trans_timer_flag = TIMER_INIT_FLAG;
-            rcv_head_flag = DATA_INIT;
-        }
-    }
-    if ( timeout_longcnt >= 1 )
-    {
-        timeout_longcnt++;
-        if ( timeout_longcnt >= 580 )
-        {
-            NRF_LOG_INFO("2-timer timeout.");
-            timeout_longcnt = 0;
-            ble_trans_timer_flag = TIMER_INIT_FLAG;
-            rcv_head_flag = DATA_INIT;
-        }
-    }
+    rcv_head_flag = DATA_INIT;
+    spi_state_reset();
 }
 
 void m_1s_timeout_hander(void* p_context)
 {
     UNUSED_PARAMETER(p_context);
+
+    nrf_drv_wdt_channel_feed(m_channel_id);
 
     one_second_counter++;
 
@@ -846,7 +809,7 @@ static void gap_params_init(void)
     APP_ERROR_CHECK(err_code);
 }
 
-static uint16_t m_ble_nus_max_data_len =
+static uint16_t m_ble_gatt_max_data_len =
     BLE_GATT_ATT_MTU_DEFAULT - 3; /**< Maximum length of data (in bytes) that can be transmitted to the peer
                                      by the Nordic UART service module. */
 
@@ -855,8 +818,8 @@ void gatt_evt_handler(nrf_ble_gatt_t* p_gatt, const nrf_ble_gatt_evt_t* p_evt)
 {
     if ( (m_conn_handle == p_evt->conn_handle) && (p_evt->evt_id == NRF_BLE_GATT_EVT_ATT_MTU_UPDATED) )
     {
-        m_ble_nus_max_data_len = p_evt->params.att_mtu_effective - OPCODE_LENGTH - HANDLE_LENGTH;
-        NRF_LOG_INFO("Data len is set to 0x%X(%d)", m_ble_nus_max_data_len, m_ble_nus_max_data_len);
+        m_ble_gatt_max_data_len = p_evt->params.att_mtu_effective - OPCODE_LENGTH - HANDLE_LENGTH;
+        NRF_LOG_INFO("Data len is set to 0x%X(%d)", m_ble_gatt_max_data_len, m_ble_gatt_max_data_len);
     }
     NRF_LOG_DEBUG(
         "ATT MTU exchange completed. central 0x%x peripheral 0x%x", p_gatt->att_mtu_desired_central,
@@ -889,6 +852,24 @@ static void nrf_qwr_error_handler(uint32_t nrf_error)
     APP_ERROR_HANDLER(nrf_error);
 }
 
+static void ble_nus_send_packet(uint8_t* data, uint16_t data_len)
+{
+    ret_code_t err_code;
+    uint16_t length = 0;
+
+    do
+    {
+        length = data_len > m_ble_gatt_max_data_len ? m_ble_gatt_max_data_len : data_len;
+        err_code = ble_nus_data_send(&m_nus, data, &length, m_conn_handle);
+        if ( (err_code != NRF_ERROR_INVALID_STATE) && (err_code != NRF_ERROR_RESOURCES) &&
+             (err_code != NRF_ERROR_NOT_FOUND) )
+        {
+            APP_ERROR_CHECK(err_code);
+        }
+    }
+    while ( err_code == NRF_ERROR_RESOURCES );
+}
+
 /**@brief Function for handling the data from the Nordic UART Service.
  *
  * @details This function will process the data received from the Nordic UART BLE Service and send
@@ -902,49 +883,39 @@ static void nus_data_handler(ble_nus_evt_t* p_evt)
     NRF_LOG_INFO("----> nus_data_handler CALLED");
     static uint32_t msg_len;
     uint32_t pad;
-    // uint8_t *rcv_data=(uint8_t *)p_evt->params.rx_data.p_data;
-    // uint32_t rcv_len=p_evt->params.rx_data.length;
+    uint8_t nus_data_buf[NRF_SDH_BLE_GATT_MAX_MTU_SIZE - OPCODE_LENGTH - HANDLE_LENGTH] = {0};
+    uint32_t nus_data_len = 0;
 
     if ( p_evt->type == BLE_NUS_EVT_RX_DATA )
     {
         NRF_LOG_INFO("Received data from BLE NUS.");
         NRF_LOG_HEXDUMP_DEBUG(p_evt->params.rx_data.p_data, p_evt->params.rx_data.length);
-        data_recived_len = p_evt->params.rx_data.length;
-        memcpy(data_recived_buf, (uint8_t*)p_evt->params.rx_data.p_data, data_recived_len);
+        nus_data_len = p_evt->params.rx_data.length;
+        memcpy(nus_data_buf, (uint8_t*)p_evt->params.rx_data.p_data, nus_data_len);
 
         if ( rcv_head_flag == DATA_INIT )
         {
-            if ( data_recived_buf[0] == '?' && data_recived_buf[1] == '#' && data_recived_buf[2] == '#' )
+            if ( nus_data_buf[0] == '?' && nus_data_buf[1] == '#' && nus_data_buf[2] == '#' )
             {
-                data_recived_flag = false;
-                if ( data_recived_len < 9 )
+                if ( nus_data_len < 9 )
                 {
                     return;
                 }
                 else
                 {
-                    // erase ST flash about 4 second
-                    if ( data_recived_buf[3] == 0x00 && data_recived_buf[4] == 0x06 )
+                    msg_len = (uint32_t)((nus_data_buf[5] << 24) + (nus_data_buf[6] << 16) + (nus_data_buf[7] << 8) +
+                                         (nus_data_buf[8]));
+                    pad = ((nus_data_len + 63) / 64) + 8;
+                    if ( msg_len > nus_data_len - pad )
                     {
-                        ble_trans_timer_flag = TIMER_START_FLAG;
-                    }
-                    else
-                    {
-                        ble_trans_timer_flag = TIMER_RESET_FLAG;
-                    }
-                    msg_len = (uint32_t)((data_recived_buf[5] << 24) + (data_recived_buf[6] << 16) +
-                                         (data_recived_buf[7] << 8) + (data_recived_buf[8]));
-                    pad = ((data_recived_len + 63) / 64) + 8;
-                    if ( msg_len > data_recived_len - pad )
-                    {
-                        msg_len -= data_recived_len - pad;
+                        msg_len -= nus_data_len - pad;
                         rcv_head_flag = DATA_HEAD;
                     }
-                    ble_evt_flag = BLE_RCV_DATA;
+                    start_data_wait_timer();
                 }
             }
-            else if ( data_recived_buf[0] == 0x5A && data_recived_buf[1] == 0xA5 && data_recived_buf[2] == 0x07 &&
-                      data_recived_buf[3] == 0x1 && data_recived_buf[4] == 0x03 )
+            else if ( nus_data_buf[0] == 0x5A && nus_data_buf[1] == 0xA5 && nus_data_buf[2] == 0x07 &&
+                      nus_data_buf[3] == 0x1 && nus_data_buf[4] == 0x03 )
             {
                 ble_adv_switch_flag = BLE_OFF_ALWAYS;
                 return;
@@ -952,30 +923,48 @@ static void nus_data_handler(ble_nus_evt_t* p_evt)
         }
         else
         {
-            if ( data_recived_buf[0] == '?' )
+            if ( nus_data_buf[0] == '?' )
             {
-                pad = (data_recived_len + 63) / 64;
-                if ( data_recived_len - pad > msg_len )
+                pad = (nus_data_len + 63) / 64;
+                if ( nus_data_len - pad > msg_len )
                 {
                     rcv_head_flag = DATA_INIT;
-                    data_recived_len = msg_len + (msg_len + 62) / 63;
+                    nus_data_len = msg_len + (msg_len + 62) / 63;
                     msg_len = 0;
                 }
                 else
                 {
-                    msg_len -= data_recived_len - pad;
+                    msg_len -= nus_data_len - pad;
                 }
-                ble_evt_flag = BLE_RCV_DATA;
-                ble_trans_timer_flag = TIMER_RESET_FLAG;
             }
             else
             {
                 rcv_head_flag = DATA_INIT;
             }
         }
-        forwarding_to_st_data();
+        // spi_write_st_data(nus_data_buf, nus_data_len);
+        app_sched_event_put(nus_data_buf, nus_data_len, spi_write_st_data);
+    }
+    else if ( p_evt->type == BLE_NUS_EVT_TX_RDY )
+    {
+        uint32_t length = 0;
+
+        length = ble_nus_send_len - ble_nus_send_offset;
+        if ( length > 0 )
+        {
+            length = length > m_ble_gatt_max_data_len ? m_ble_gatt_max_data_len : length;
+            ble_nus_send_packet(ble_nus_send_buf + ble_nus_send_offset, length);
+            ble_nus_send_offset += length;
+        }
+        else
+        {
+            ble_nus_send_len = 0;
+            ble_nus_send_offset = 0;
+        }
     }
 }
+
+#include "fido.h"
 
 /**@brief Function for initializing services that will be used by the application.
  *
@@ -987,6 +976,7 @@ static void services_init(void)
     nrf_ble_qwr_init_t qwr_init = {0};
     ble_dis_init_t dis_init;
     ble_nus_init_t nus_init;
+    ble_fido_init_t fido_init = {0};
 
     // Initialize Queued Write Module.
     qwr_init.error_handler = nrf_qwr_error_handler;
@@ -1002,6 +992,7 @@ static void services_init(void)
     memset(&dis_init, 0, sizeof(dis_init));
 
     ble_srv_ascii_to_utf8(&dis_init.manufact_name_str, MANUFACTURER_NAME);
+    ble_srv_ascii_to_utf8(&dis_init.model_num_str, ble_adv_name);
     ble_srv_ascii_to_utf8(&dis_init.serial_num_str, MODEL_NUMBER);
     ble_srv_ascii_to_utf8(&dis_init.hw_rev_str, HW_REVISION);
     ble_srv_ascii_to_utf8(&dis_init.fw_rev_str, FW_REVISION);
@@ -1017,6 +1008,12 @@ static void services_init(void)
     err_code = ble_dis_init(&dis_init);
     APP_ERROR_CHECK(err_code);
 #endif
+
+    // Initialize FIDO.
+    memset(&fido_init, 0, sizeof(fido_init));
+    fido_init.data_handler = fido_data_handler;
+    err_code = ble_fido_init(&m_fido, &fido_init);
+    APP_ERROR_CHECK(err_code);
 
     // Initialize NUS.
     memset(&nus_init, 0, sizeof(nus_init));
@@ -1044,7 +1041,7 @@ static void timers_init(void)
     err_code = app_timer_create(&m_1s_timer_id, APP_TIMER_MODE_REPEATED, m_1s_timeout_hander);
     APP_ERROR_CHECK(err_code);
 
-    err_code = app_timer_create(&m_100ms_timer_id, APP_TIMER_MODE_REPEATED, m_100ms_timeout_hander);
+    err_code = app_timer_create(&data_wait_timer_id, APP_TIMER_MODE_SINGLE_SHOT, data_wait_timeout_hander);
     APP_ERROR_CHECK(err_code);
 }
 /**@brief Function for starting application timers.
@@ -1061,8 +1058,20 @@ static void application_timers_start(void)
     err_code = app_timer_start(m_1s_timer_id, ONE_SECOND_INTERVAL, NULL);
     APP_ERROR_CHECK(err_code);
 
-    // Start 100ms timer
-    err_code = app_timer_start(m_100ms_timer_id, RCV_DATA_TIMEOUT_INTERVAL, NULL);
+    // Start data wait timer
+    // err_code = app_timer_start(data_wait_timer_id, RCV_DATA_TIMEOUT_INTERVAL, NULL);
+    // APP_ERROR_CHECK(err_code);
+}
+
+void start_data_wait_timer(void)
+{
+    ret_code_t err_code = app_timer_start(data_wait_timer_id, RCV_DATA_TIMEOUT_INTERVAL, NULL);
+    APP_ERROR_CHECK(err_code);
+}
+
+void stop_data_wait_timer(void)
+{
+    ret_code_t err_code = app_timer_stop(data_wait_timer_id);
     APP_ERROR_CHECK(err_code);
 }
 
@@ -1158,8 +1167,6 @@ static void ble_evt_handler(const ble_evt_t* p_ble_evt, void* p_context)
     case BLE_GAP_EVT_CONNECTED:
         NRF_LOG_DEBUG("%s ---> BLE_GAP_EVT_CONNECTED", __func__);
         {
-            ble_evt_flag = BLE_CONNECT;
-
             bak_buff[0] = BLE_CMD_CON_STA;
             bak_buff[1] = BLE_CON_STATUS;
             send_stm_data(bak_buff, 2);
@@ -1176,7 +1183,6 @@ static void ble_evt_handler(const ble_evt_t* p_ble_evt, void* p_context)
     case BLE_GAP_EVT_DISCONNECTED:
         NRF_LOG_DEBUG("%s ---> BLE_GAP_EVT_DISCONNECTED", __func__);
         {
-            ble_evt_flag = BLE_DISCONNECT;
             bond_check_key_flag = INIT_VALUE;
             m_conn_handle = BLE_CONN_HANDLE_INVALID;
 
@@ -1730,116 +1736,23 @@ static void power_management_init(void)
     APP_ERROR_CHECK(err_code);
 }
 
-void forwarding_to_st_data(void)
+void ble_nus_send(uint8_t* data, uint16_t len)
 {
-    uint8_t send_spi_offset = 0;
-
-    if ( BLE_RCV_DATA == ble_evt_flag )
-    {
-        if ( data_recived_len != 0 )
-        {
-            while ( data_recived_len >= 64 )
-            {
-                usr_spi_write(data_recived_buf + send_spi_offset, 64);
-                send_spi_offset += 64;
-                data_recived_len -= 64;
-            }
-            if ( data_recived_len )
-            {
-                usr_spi_write(data_recived_buf + send_spi_offset, 64);
-                data_recived_len = 0;
-                send_spi_offset = 0;
-            }
-        }
-        else
-        {
-            usr_spi_write(data_recived_buf, 64);
-        }
-
-        spi_evt_flag = SEND_SPI_DATA;
-        RST_ONE_SECNOD_COUNTER();
-        NRF_LOG_HEXDUMP_INST_INFO("recv data", data_recived_buf, data_recived_len);
-    }
-}
-
-static void ble_resp_data(void* p_event_data, uint16_t event_size)
-{
-    ret_code_t err_code;
     uint16_t length = 0;
-    uint16_t offset = 0;
 
-    if ( !ble_send_ready )
-        return;
+    NRF_LOG_INFO("ble_nus_send_len: %d", len);
+
     if ( m_conn_handle == BLE_CONN_HANDLE_INVALID )
     {
-        ble_send_ready = false;
         return;
     }
 
-    ble_send_ready = false;
+    ble_nus_send_buf = data;
+    ble_nus_send_len = len;
 
-    while ( data_recived_len > m_ble_nus_max_data_len )
-    {
-        length = m_ble_nus_max_data_len;
-        do
-        {
-            err_code = ble_nus_data_send(&m_nus, data_recived_buf + offset, &length, m_conn_handle);
-            if ( err_code == NRF_ERROR_INVALID_STATE )
-            {
-                data_recived_len = 0;
-                return;
-            }
-            if ( (err_code != NRF_ERROR_INVALID_STATE) && (err_code != NRF_ERROR_RESOURCES) &&
-                 (err_code != NRF_ERROR_NOT_FOUND) )
-            {
-                APP_ERROR_CHECK(err_code);
-            }
-            if ( err_code == NRF_ERROR_INVALID_STATE )
-            {
-                return;
-            }
-            if ( err_code == NRF_SUCCESS )
-            {
-                data_recived_len -= m_ble_nus_max_data_len;
-                offset += m_ble_nus_max_data_len;
-            }
-        }
-        while ( err_code == NRF_ERROR_RESOURCES );
-    }
-
-    if ( data_recived_len )
-    {
-        length = data_recived_len;
-        do
-        {
-            err_code = ble_nus_data_send(&m_nus, data_recived_buf + offset, &length, m_conn_handle);
-            if ( (err_code != NRF_ERROR_INVALID_STATE) && (err_code != NRF_ERROR_RESOURCES) &&
-                 (err_code != NRF_ERROR_NOT_FOUND) )
-            {
-                APP_ERROR_CHECK(err_code);
-            }
-        }
-        while ( err_code == NRF_ERROR_RESOURCES );
-        data_recived_len = 0;
-        length = 0;
-    }
-}
-static void phone_resp_data(void)
-{
-    read_st_resp_data();
-    spi_evt_flag = READ_SPI_HEAD;
-
-    if ( false == data_recived_flag )
-        return;
-
-    data_recived_flag = false;
-    spi_evt_flag = READ_SPI_DATA;
-
-    // response data
-    // ble_resp_data();
-    spi_evt_flag = DEFAULT_FLAG;
-    ble_send_ready = true;
-    RST_ONE_SECNOD_COUNTER();
+    length = len > m_ble_gatt_max_data_len ? m_ble_gatt_max_data_len : len;
+    ble_nus_send_offset = length;
+    ble_nus_send_packet(data, length);
 }
 
 /**@brief Function for handling the idle state (main loop).
@@ -1872,11 +1785,12 @@ void in_gpiote_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action)
         NRF_LOG_INFO("GPIO IRQ -> SLAVE_SPI_RSP_IO");
         if ( spi_dir_out )
         {
-            spi_send_done = true;
+            spi_dir_out = false;
         }
-        else
+        else if ( nrf_gpio_pin_read(SLAVE_SPI_RSP_IO) == 0 && !spi_dir_out )
         {
-            phone_resp_data();
+            // spi_read_st_data(NULL, 0);
+            app_sched_event_put(NULL, 0, spi_read_st_data);
         }
         break;
     default:
@@ -1949,7 +1863,6 @@ static bool bt_disconnect()
     {
         if ( NRF_SUCCESS != sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION) )
             return false;
-        ble_evt_flag = BLE_DISCONNECT;
         NRF_LOG_INFO("bt_disconnect");
     }
     int i = 0;
@@ -1994,39 +1907,40 @@ static bool bt_advertising_ctrl(bool enable, bool commit)
 
 static void rsp_st_uart_cmd(void* p_event_data, uint16_t event_size)
 {
-    memset(bak_buff, 0x00, sizeof(bak_buff));
-    if ( RESPONESE_NAME_UART == trans_info_flag )
+    if ( trans_info_flag == DEF_RESP )
     {
+        return;
+    }
+
+    memset(bak_buff, 0x00, sizeof(bak_buff));
+    switch ( trans_info_flag )
+    {
+    case RESPONESE_NAME_UART:
         bak_buff[0] = BLE_CMD_ADV_NAME;
         memcpy(&bak_buff[1], (uint8_t*)ble_adv_name, ADV_NAME_LENGTH);
         send_stm_data(bak_buff, 1 + ADV_NAME_LENGTH);
-        trans_info_flag = DEF_RESP;
-    }
-    else if ( trans_info_flag == RESPONESE_VER_UART )
-    {
+        break;
+
+    case RESPONESE_VER_UART:
         bak_buff[0] = BLE_FIRMWARE_VER;
         memcpy(&bak_buff[1], FW_REVISION, sizeof(FW_REVISION) - 1);
         send_stm_data(bak_buff, sizeof(FW_REVISION));
-        trans_info_flag = DEF_RESP;
-    }
-    else if ( trans_info_flag == RESPONESE_SD_VER_UART )
-    {
+        break;
+
+    case RESPONESE_SD_VER_UART:
         bak_buff[0] = BLE_SOFTDEVICE_VER;
         memcpy(&bak_buff[1], SW_REVISION, sizeof(SW_REVISION) - 1);
         send_stm_data(bak_buff, sizeof(SW_REVISION));
-        trans_info_flag = DEF_RESP;
-    }
-    else if ( trans_info_flag == RESPONESE_BOOT_VER_UART )
-    {
+        break;
+
+    case RESPONESE_BOOT_VER_UART:
         bak_buff[0] = BLE_BOOTLOADER_VER;
         memcpy(&bak_buff[1], BT_REVISION, sizeof(BT_REVISION) - 1);
         send_stm_data(bak_buff, sizeof(BT_REVISION));
-        trans_info_flag = DEF_RESP;
-    }
-    else if ( trans_info_flag == RESPONESE_BLE_PUBKEY )
-    {
-        bak_buff[0] = BLE_CMD_KEY_RESP;
+        break;
 
+    case RESPONESE_BLE_PUBKEY:
+        bak_buff[0] = BLE_CMD_KEY_RESP;
         if ( deviceConfig_p->keystore.flag_locked == DEVICE_CONFIG_FLAG_MAGIC )
         {
             bak_buff[1] = BLE_KEY_RESP_FAILED;
@@ -2043,24 +1957,19 @@ static void rsp_st_uart_cmd(void* p_event_data, uint16_t event_size)
             memcpy(&bak_buff[2], deviceConfig_p->keystore.public_key, sizeof(deviceConfig_p->keystore.public_key));
             send_stm_data(bak_buff, sizeof(deviceConfig_p->keystore.public_key) + 2);
         }
+        break;
 
-        trans_info_flag = DEF_RESP;
-    }
-    else if ( trans_info_flag == RESPONESE_BLE_PUBKEY_LOCK )
-    {
-        // please note, deviceCfg_keystore_lock will fail if already locked
+    case RESPONESE_BLE_PUBKEY_LOCK:
         bak_buff[0] = BLE_CMD_KEY_RESP;
         bak_buff[1] =
             ((deviceCfg_keystore_lock(&(deviceConfig_p->keystore)) && device_config_commit()) ? BLE_KEY_RESP_SUCCESS
                                                                                               : BLE_KEY_RESP_FAILED);
         send_stm_data(bak_buff, 2);
-        trans_info_flag = DEF_RESP;
-    }
-    else if ( trans_info_flag == RESPONESE_BLE_SIGN )
-    {
+        break;
+
+    case RESPONESE_BLE_SIGN:
         uint32_t msg_len = (uart_data_array[2] << 8 | uart_data_array[3]) - 3;
         bak_buff[0] = BLE_CMD_KEY_RESP;
-
         if ( !deviceCfg_keystore_validate(&(deviceConfig_p->keystore)) )
         {
             bak_buff[1] = BLE_KEY_RESP_FAILED;
@@ -2071,24 +1980,21 @@ static void rsp_st_uart_cmd(void* p_event_data, uint16_t event_size)
             bak_buff[1] = BLE_KEY_RESP_SIGN;
             if ( deviceConfig_p->keystore.flag_locked != DEVICE_CONFIG_FLAG_MAGIC )
             {
-                // if keystore not locked, lock it now
                 deviceCfg_keystore_lock(&(deviceConfig_p->keystore));
                 device_config_commit();
             }
             sign_ecdsa_msg(deviceConfig_p->keystore.private_key, uart_data_array + 6, msg_len, bak_buff + 2);
             send_stm_data(bak_buff, 64 + 2);
         }
-        trans_info_flag = DEF_RESP;
-    }
-    else if ( trans_info_flag == RESPONESE_BUILD_ID )
-    {
+        break;
+
+    case RESPONESE_BUILD_ID:
         bak_buff[0] = BLE_CMD_BUILD_ID;
         memcpy(&bak_buff[1], (uint8_t*)BUILD_ID, 7);
         send_stm_data(bak_buff, 8);
-        trans_info_flag = DEF_RESP;
-    }
-    else if ( trans_info_flag == RESPONESE_HASH )
-    {
+        break;
+
+    case RESPONESE_HASH:
         ret_code_t err_code = NRF_SUCCESS;
         nrf_crypto_backend_hash_context_t hash_context = {0};
         uint8_t hash[32] = {0};
@@ -2118,8 +2024,11 @@ static void rsp_st_uart_cmd(void* p_event_data, uint16_t event_size)
         bak_buff[0] = BLE_CMD_HASH;
         memcpy(&bak_buff[1], hash, 32);
         send_stm_data(bak_buff, 33);
-        trans_info_flag = DEF_RESP;
+        break;
+    default:
+        break;
     }
+    trans_info_flag = DEF_RESP;
 }
 static void manage_bat_level(void* p_event_data, uint16_t event_size)
 {
@@ -2130,7 +2039,6 @@ static void manage_bat_level(void* p_event_data, uint16_t event_size)
         bak_bat_persent = pmu_p->PowerStatus->batteryPercent;
         bak_buff[0] = BLE_SYSTEM_POWER_PERCENT;
         bak_buff[1] = pmu_p->PowerStatus->batteryPercent;
-        NRF_LOG_INFO("send_stm_data 018");
         send_stm_data(bak_buff, 2);
     }
 }
@@ -2622,18 +2530,16 @@ int main(void)
     application_timers_start();
     for ( ;; )
     {
-        // event trigger
-        app_sched_event_put(NULL, 0, pmu_sys_voltage_monitor);
-        app_sched_event_put(NULL, 0, pmu_pwrok_pull);
-        app_sched_event_put(NULL, 0, pmu_irq_pull);
-        app_sched_event_put(NULL, 0, pmu_status_refresh);
-        app_sched_event_put(NULL, 0, pmu_req_process);
-        app_sched_event_put(NULL, 0, ble_ctl_process);
-        app_sched_event_put(NULL, 0, rsp_st_uart_cmd);
-        app_sched_event_put(NULL, 0, manage_bat_level);
-        app_sched_event_put(NULL, 0, ble_resp_data);
-        app_sched_event_put(NULL, 0, led_ctl_process);
-        app_sched_event_put(NULL, 0, bat_msg_report_process);
+        pmu_sys_voltage_monitor(NULL, 0);
+        pmu_pwrok_pull(NULL, 0);
+        pmu_irq_pull(NULL, 0);
+        pmu_status_refresh(NULL, 0);
+        pmu_req_process(NULL, 0);
+        ble_ctl_process(NULL, 0);
+        rsp_st_uart_cmd(NULL, 0);
+        manage_bat_level(NULL, 0);
+        led_ctl_process(NULL, 0);
+        bat_msg_report_process(NULL, 0);
         // event exec
         app_sched_execute();
         // idle
