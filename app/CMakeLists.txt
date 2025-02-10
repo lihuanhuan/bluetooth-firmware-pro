@@ -46,6 +46,7 @@ set(
   ${NRF_SDK_ROOT}/components/ble/ble_services/ble_rscs
   ${NRF_SDK_ROOT}/components/ble/ble_services/ble_rscs_c
   ${NRF_SDK_ROOT}/components/ble/ble_services/ble_tps
+  ${NRF_SDK_ROOT}/components/ble/ble_services/ble_fido
   ${NRF_SDK_ROOT}/components/ble/common
   ${NRF_SDK_ROOT}/components/ble/nrf_ble_gatt
   ${NRF_SDK_ROOT}/components/ble/nrf_ble_gq
@@ -156,6 +157,7 @@ set(
   ${NRF_SDK_ROOT}/components/ble/ble_services/ble_dis/ble_dis.c
   ${NRF_SDK_ROOT}/components/ble/ble_services/ble_lbs/ble_lbs.c
   ${NRF_SDK_ROOT}/components/ble/ble_services/ble_nus/ble_nus.c
+  ${NRF_SDK_ROOT}/components/ble/ble_services/ble_fido/ble_fido.c
   ${NRF_SDK_ROOT}/components/ble/common/ble_advdata.c
   ${NRF_SDK_ROOT}/components/ble/common/ble_conn_params.c
   ${NRF_SDK_ROOT}/components/ble/common/ble_conn_state.c
