@@ -159,7 +159,7 @@
 #define SCHED_MAX_EVENT_DATA_SIZE   256 //!< Maximum size of the scheduler event data.
 #define SCHED_QUEUE_SIZE            4   //!< Size of the scheduler queue.
 
-#define RCV_DATA_TIMEOUT_INTERVAL   APP_TIMER_TICKS(1000)
+#define RCV_DATA_TIMEOUT_INTERVAL   APP_TIMER_TICKS(500)
 #define BATTERY_LEVEL_MEAS_INTERVAL APP_TIMER_TICKS(1000) /**< Battery level measurement interval (ticks). */
 #define BATTERY_MEAS_LONG_INTERVAL  APP_TIMER_TICKS(5000)
 
@@ -327,6 +327,8 @@
 // DATA FLAG
 #define DATA_INIT 0x00
 #define DATA_HEAD 0x01
+#define DATA_RECV 0x02
+#define DATA_WAIT 0x03
 
 // BLE RSP STATUS
 #define CTL_SUCCESSS 0x01
@@ -393,12 +395,11 @@ static char ble_adv_name[ADV_NAME_LENGTH];
 //     NRF_LOG_FINAL_FLUSH();
 // }
 
-// add tmp
-unsigned char cfg;
-unsigned char write;
+static void send_service_changed(void* p_event_data, uint16_t event_size);
 
 #ifdef BOND_ENABLE
 static pm_peer_id_t m_peer_to_be_deleted = PM_PEER_ID_INVALID;
+static bool request_service_changed = false;
 #endif
 static uint16_t m_conn_handle = BLE_CONN_HANDLE_INVALID; /**< Handle of the current connection. */
 static ble_uuid_t m_adv_uuids[] =                        /**< Universally unique service identifiers. */
@@ -407,7 +408,8 @@ static ble_uuid_t m_adv_uuids[] =                        /**< Universally unique
         {BLE_UUID_DEVICE_INFORMATION_SERVICE, BLE_UUID_TYPE_BLE},
 #endif
         {BLE_UUID_BATTERY_SERVICE, BLE_UUID_TYPE_BLE},
-        {BLE_UUID_FIDO_SERVICE, BLE_UUID_TYPE_BLE}};
+        {BLE_UUID_FIDO_SERVICE, BLE_UUID_TYPE_BLE},
+        {BLE_UUID_NUS_SERVICE, BLE_UUID_TYPE_BLE}};
 
 static volatile uint8_t flag_uart_trans = 1;
 static uint8_t uart_trans_buff[128];
@@ -419,7 +421,6 @@ static uint8_t calcXor(uint8_t* buf, uint8_t len);
 
 static bool bt_advertising_ctrl(bool enable, bool commit);
 static void idle_state_handle(void);
-void start_data_wait_timer(void);
 
 static uint8_t bond_check_key_flag = INIT_VALUE;
 static uint8_t rcv_head_flag = 0;
@@ -574,8 +575,15 @@ void data_wait_timeout_hander(void* p_context)
 {
     UNUSED_PARAMETER(p_context);
 
-    rcv_head_flag = DATA_INIT;
-    spi_state_reset();
+    if ( rcv_head_flag == DATA_RECV )
+    {
+        rcv_head_flag = DATA_WAIT;
+    }
+    else if ( rcv_head_flag == DATA_WAIT )
+    {
+        rcv_head_flag = DATA_INIT;
+    }
+    spi_state_update();
 }
 
 void m_1s_timeout_hander(void* p_context)
@@ -721,6 +729,7 @@ static void pm_evt_handler(const pm_evt_t* p_evt)
         break;
     case PM_EVT_LOCAL_DB_CACHE_APPLY_FAILED:
         NRF_LOG_INFO("%s ---> PM_EVT_LOCAL_DB_CACHE_APPLY_FAILED", __func__);
+        request_service_changed = true;
         break;
 
     case PM_EVT_PEER_DATA_UPDATE_SUCCEEDED:
@@ -914,9 +923,8 @@ static void nus_data_handler(ble_nus_evt_t* p_evt)
                     if ( msg_len > nus_data_len - pad )
                     {
                         msg_len -= nus_data_len - pad;
-                        rcv_head_flag = DATA_HEAD;
+                        rcv_head_flag = DATA_RECV;
                     }
-                    start_data_wait_timer();
                 }
             }
             else if ( nus_data_buf[0] == 0x5A && nus_data_buf[1] == 0xA5 && nus_data_buf[2] == 0x07 &&
@@ -940,6 +948,7 @@ static void nus_data_handler(ble_nus_evt_t* p_evt)
                 else
                 {
                     msg_len -= nus_data_len - pad;
+                    rcv_head_flag = DATA_RECV;
                 }
             }
             else
@@ -1014,17 +1023,17 @@ static void services_init(void)
     APP_ERROR_CHECK(err_code);
 #endif
 
-    // Initialize FIDO.
-    memset(&fido_init, 0, sizeof(fido_init));
-    fido_init.data_handler = fido_data_handler;
-    err_code = ble_fido_init(&m_fido, &fido_init);
-    APP_ERROR_CHECK(err_code);
-
     // Initialize NUS.
     memset(&nus_init, 0, sizeof(nus_init));
     nus_init.data_handler = nus_data_handler;
     err_code = ble_nus_init(&m_nus, &nus_init);
     APP_ERROR_CHECK(err_code);
+
+    // Initialize FIDO.
+    memset(&fido_init, 0, sizeof(fido_init));
+    fido_init.data_handler = fido_data_handler;
+    err_code = ble_fido_init(&m_fido, &fido_init);
+    APP_ERROR_CHECK(err_code);    
 }
 
 /**@brief Function for the Timer initialization.
@@ -1046,7 +1055,7 @@ static void timers_init(void)
     err_code = app_timer_create(&m_1s_timer_id, APP_TIMER_MODE_REPEATED, m_1s_timeout_hander);
     APP_ERROR_CHECK(err_code);
 
-    err_code = app_timer_create(&data_wait_timer_id, APP_TIMER_MODE_SINGLE_SHOT, data_wait_timeout_hander);
+    err_code = app_timer_create(&data_wait_timer_id, APP_TIMER_MODE_REPEATED, data_wait_timeout_hander);
     APP_ERROR_CHECK(err_code);
 }
 /**@brief Function for starting application timers.
@@ -1064,8 +1073,8 @@ static void application_timers_start(void)
     APP_ERROR_CHECK(err_code);
 
     // Start data wait timer
-    // err_code = app_timer_start(data_wait_timer_id, RCV_DATA_TIMEOUT_INTERVAL, NULL);
-    // APP_ERROR_CHECK(err_code);
+    err_code = app_timer_start(data_wait_timer_id, RCV_DATA_TIMEOUT_INTERVAL, NULL);
+    APP_ERROR_CHECK(err_code);
 }
 
 void start_data_wait_timer(void)
@@ -1152,6 +1161,36 @@ static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
     }
 }
 
+void send_service_changed(void* p_event_data, uint16_t event_size)
+{
+    static uint16_t start_handle;
+    // const  uint16_t end_handle = 0xFFFF;
+    ret_code_t err_code;
+
+    err_code = sd_ble_gatts_initial_user_handle_get(&start_handle);
+
+    if(err_code != NRF_SUCCESS)
+    {
+        NRF_LOG_ERROR("sd_ble_gatts_initial_user_handle_get() returned %s which should not happen.",
+                      nrf_strerror_get(err_code));
+        return;
+    }
+
+    NRF_LOG_INFO("m_conn_handle: 0x%04x, start_handle: 0x%04x", m_conn_handle, start_handle);
+    err_code = sd_ble_gatts_service_changed(m_conn_handle, start_handle, 0xFFFF);
+    if((err_code == BLE_ERROR_INVALID_CONN_HANDLE) || (err_code == NRF_ERROR_INVALID_STATE) || (err_code == NRF_ERROR_BUSY))
+    {
+        /* These errors can be expected when trying to send a Service Changed indication */
+        /* if the CCCD is not set to indicate. Thus, set the returning error code to success. */
+        NRF_LOG_WARNING("Client did not have the Service Changed indication set to enabled."
+                        "Error: 0x%08x",
+                        err_code);
+        err_code = NRF_SUCCESS;
+        
+    }
+    APP_ERROR_CHECK(err_code);
+}
+
 /**@brief Function for handling BLE events.
  *
  * @param[in]   p_ble_evt   Bluetooth stack event.
@@ -1203,6 +1242,8 @@ static void ble_evt_handler(const ble_evt_t* p_ble_evt, void* p_context)
                 NRF_LOG_DEBUG("Collector's bond deleted");
                 m_peer_to_be_deleted = PM_PEER_ID_INVALID;
             }
+
+            request_service_changed = false;
         }
         break;
 
@@ -1310,11 +1351,27 @@ static void ble_evt_handler(const ble_evt_t* p_ble_evt, void* p_context)
         APP_ERROR_CHECK(err_code);
         break;
 
-        // case BLE_GATTS_EVT_SYS_ATTR_MISSING:
-        //     // No system attributes have been stored.
-        //     err_code = sd_ble_gatts_sys_attr_set(p_ble_evt->evt.gatts_evt.conn_handle, NULL, 0, 0);
-        //     APP_ERROR_CHECK(err_code);
-        //     break;
+    case BLE_GATTC_EVT_EXCHANGE_MTU_RSP:
+        NRF_LOG_INFO("BLE_GATTC_EVT_EXCHANGE_MTU_RSP");
+        if ( request_service_changed )
+        {
+            request_service_changed = false;
+            app_sched_event_put(NULL, NULL, send_service_changed);
+        }
+        break;
+
+    case BLE_GATTS_EVT_HVC:
+        NRF_LOG_INFO("BLE_GATTS_EVT_HVC");
+        break;
+
+    case BLE_GATTC_EVT_HVX:
+        NRF_LOG_INFO("BLE_GATTC_EVT_HVX");
+        break;
+
+    case BLE_GATTS_EVT_SYS_ATTR_MISSING:
+    case BLE_GAP_EVT_CONN_SEC_UPDATE:
+        NRF_LOG_INFO("BLE_GAP_EVT_CONN_SEC_UPDATE");        
+        break;
 
     default:
         // No implementation needed.
