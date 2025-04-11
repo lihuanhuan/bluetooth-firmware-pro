@@ -11,6 +11,7 @@
 #include "nrf_gpio.h"
 
 // workarounds to keep this file clean
+static uint8_t stm_data_buff[8];
 static void (*send_stm_data_p)(uint8_t* pdata, uint8_t lenth);
 void set_send_stm_data_p(void (*send_stm_data_p_)(uint8_t* pdata, uint8_t lenth))
 {
@@ -35,34 +36,34 @@ static void pmu_if_irq(const uint64_t irq)
     if ( 0 != (irq & (1 << PWR_IRQ_PWR_CONNECTED)) )
     {
         NRF_LOG_INFO("irq PWR_IRQ_PWR_CONNECTED");
-        bak_buff[0] = BLE_CMD_POWER_STA;
-        bak_buff[1] = BLE_INSERT_POWER;
-        bak_buff[2] = (pmu_p->PowerStatus->wiredCharge ? AXP_CHARGE_TYPE_USB : AXP_CHARGE_TYPE_WIRELESS);
-        send_stm_data_p(bak_buff, 3);
+        stm_data_buff[0] = BLE_CMD_POWER_STA;
+        stm_data_buff[1] = BLE_INSERT_POWER;
+        stm_data_buff[2] = (pmu_p->PowerStatus->wiredCharge ? CHARGE_TYPE_USB : CHARGE_TYPE_WIRELESS);
+        send_stm_data_p(stm_data_buff, 3);
     }
     if ( 0 != (irq & (1 << PWR_IRQ_PWR_DISCONNECTED)) )
     {
         NRF_LOG_INFO("irq PWR_IRQ_PWR_DISCONNECTED");
-        bak_buff[0] = BLE_CMD_POWER_STA;
-        bak_buff[1] = BLE_REMOVE_POWER;
-        bak_buff[2] = 0;
-        send_stm_data_p(bak_buff, 3);
+        stm_data_buff[0] = BLE_CMD_POWER_STA;
+        stm_data_buff[1] = BLE_REMOVE_POWER;
+        stm_data_buff[2] = 0;
+        send_stm_data_p(stm_data_buff, 3);
     }
     if ( 0 != (irq & (1 << PWR_IRQ_CHARGING)) )
     {
         NRF_LOG_INFO("irq PWR_IRQ_CHARGING");
-        bak_buff[0] = BLE_CMD_POWER_STA;
-        bak_buff[1] = BLE_CHARGING_PWR;
-        bak_buff[2] = (pmu_p->PowerStatus->wiredCharge ? AXP_CHARGE_TYPE_USB : AXP_CHARGE_TYPE_WIRELESS);
-        send_stm_data_p(bak_buff, 3);
+        stm_data_buff[0] = BLE_CMD_POWER_STA;
+        stm_data_buff[1] = BLE_CHARGING_PWR;
+        stm_data_buff[2] = (pmu_p->PowerStatus->wiredCharge ? CHARGE_TYPE_USB : CHARGE_TYPE_WIRELESS);
+        send_stm_data_p(stm_data_buff, 3);
     }
     // if ( 0 != (irq & (1 << PWR_IRQ_CHARGED)) )
     // {
     //     NRF_LOG_INFO("irq PWR_IRQ_CHARGED");
-    //     bak_buff[0] = BLE_CMD_POWER_STA;
-    //     bak_buff[1] = BLE_CHAGE_OVER;
-    //     bak_buff[2] = (pmu_p->PowerStatus->wiredCharge ? AXP_CHARGE_TYPE_USB : AXP_CHARGE_TYPE_WIRELESS);
-    //     send_stm_data_p(bak_buff, 3);
+    //     stm_data_buff[0] = BLE_CMD_POWER_STA;
+    //     stm_data_buff[1] = BLE_CHARGE_OVER;
+    //     stm_data_buff[2] = (pmu_p->PowerStatus->wiredCharge ? CHARGE_TYPE_USB : CHARGE_TYPE_WIRELESS);
+    //     send_stm_data_p(stm_data_buff, 3);
     // }
     if ( 0 != (irq & (1 << PWR_IRQ_BATT_LOW)) )
     {
@@ -75,32 +76,80 @@ static void pmu_if_irq(const uint64_t irq)
     if ( 0 != (irq & (1 << PWR_IRQ_PB_PRESS)) )
     {
         NRF_LOG_INFO("irq PWR_IRQ_PB_PRESS");
-        bak_buff[0] = BLE_CMD_KEY_STA;
-        bak_buff[1] = 0x20;
-        send_stm_data_p(bak_buff, 2);
+        stm_data_buff[0] = BLE_CMD_KEY_STA;
+        stm_data_buff[1] = BLE_KEY_PRESS;
+        send_stm_data_p(stm_data_buff, 2);
     }
     if ( 0 != (irq & (1 << PWR_IRQ_PB_RELEASE)) )
     {
         NRF_LOG_INFO("irq PWR_IRQ_PB_RELEASE");
-        bak_buff[0] = BLE_CMD_KEY_STA;
-        bak_buff[1] = 0x40;
-        send_stm_data_p(bak_buff, 2);
+        stm_data_buff[0] = BLE_CMD_KEY_STA;
+        stm_data_buff[1] = BLE_KEY_RELEASE;
+        send_stm_data_p(stm_data_buff, 2);
     }
     if ( 0 != (irq & (1 << PWR_IRQ_PB_SHORT)) )
     {
         NRF_LOG_INFO("irq PWR_IRQ_PB_SHORT");
-        bak_buff[0] = BLE_CMD_KEY_STA;
-        bak_buff[1] = 0x01;
-        send_stm_data_p(bak_buff, 2);
+        stm_data_buff[0] = BLE_CMD_KEY_STA;
+        stm_data_buff[1] = BLE_KEY_SHORT_PRESS;
+        send_stm_data_p(stm_data_buff, 2);
     }
     if ( 0 != (irq & (1 << PWR_IRQ_PB_LONG)) )
     {
         NRF_LOG_INFO("irq PWR_IRQ_PB_LONG");
-        bak_buff[0] = BLE_CMD_KEY_STA;
-        bak_buff[1] = 0x02;
-        send_stm_data_p(bak_buff, 2);
+        stm_data_buff[0] = BLE_CMD_KEY_STA;
+        stm_data_buff[1] = BLE_KEY_LONG_PRESS;
+        send_stm_data_p(stm_data_buff, 2);
     }
     if ( 0 != (irq & (1 << PWR_IRQ_PB_FORCEOFF)) ) {}
+
+    // power error handling
+    if ( 0 != (irq & ((1 << PWR_IRQ_PMU_OVER_TEMP) | (1 << PWR_IRQ_BATT_OVER_TEMP) | (1 << PWR_IRQ_BATT_UNDER_TEMP) |
+                      (1 << PWR_IRQ_BATT_OVER_VOLTAGE) | (1 << PWR_IRQ_CHARGE_TIMEOUT))) )
+    {
+        if ( 0 != (irq & (1 << PWR_IRQ_PMU_OVER_TEMP)) )
+        {
+            NRF_LOG_INFO("irq PWR_IRQ_PMU_OVER_TEMP");
+            stm_data_buff[0] = BLE_CMD_POWER_ERR;
+            stm_data_buff[1] = BLE_CMD_POWER_ERR__PMU_OVER_TEMP;
+            send_stm_data_p(stm_data_buff, 2);
+        }
+        if ( 0 != (irq & (1 << PWR_IRQ_BATT_OVER_TEMP)) )
+        {
+            NRF_LOG_INFO("irq PWR_IRQ_BATT_OVER_TEMP");
+            stm_data_buff[0] = BLE_CMD_POWER_ERR;
+            stm_data_buff[1] = BLE_CMD_POWER_ERR__BATT_OVER_TEMP;
+            send_stm_data_p(stm_data_buff, 2);
+        }
+        if ( 0 != (irq & (1 << PWR_IRQ_BATT_UNDER_TEMP)) )
+        {
+            NRF_LOG_INFO("irq PWR_IRQ_BATT_UNDER_TEMP");
+            stm_data_buff[0] = BLE_CMD_POWER_ERR;
+            stm_data_buff[1] = BLE_CMD_POWER_ERR__BATT_UNDER_TEMP;
+            send_stm_data_p(stm_data_buff, 2);
+        }
+        if ( 0 != (irq & (1 << PWR_IRQ_BATT_OVER_VOLTAGE)) )
+        {
+            NRF_LOG_INFO("irq PWR_IRQ_BATT_OVER_VOLTAGE");
+            stm_data_buff[0] = BLE_CMD_POWER_ERR;
+            stm_data_buff[1] = BLE_CMD_POWER_ERR__BATT_OVER_VOLTAGE;
+            send_stm_data_p(stm_data_buff, 2);
+        }
+        if ( 0 != (irq & (1 << PWR_IRQ_CHARGE_TIMEOUT)) )
+        {
+            NRF_LOG_INFO("irq PWR_IRQ_CHARGE_TIMEOUT");
+            stm_data_buff[0] = BLE_CMD_POWER_ERR;
+            stm_data_buff[1] = BLE_CMD_POWER_ERR__CHARGE_TIMEOUT;
+            send_stm_data_p(stm_data_buff, 2);
+        }
+    }
+    else
+    {
+        NRF_LOG_INFO("irq BLE_CMD_POWER_ERR__NONE");
+        stm_data_buff[0] = BLE_CMD_POWER_ERR;
+        stm_data_buff[1] = BLE_CMD_POWER_ERR__NONE;
+        send_stm_data_p(stm_data_buff, 2);
+    }
 }
 
 static bool pmu_if_gpio_config(uint32_t pin_num, const Power_GPIO_Config_t config)
@@ -322,3 +371,55 @@ void axp_reg_dump(uint8_t pmu_addr)
         pmu_if.Log(PWR_LOG_LEVEL_INFO, "reg 0x%02x = 0x%02x", reg, val);
     }
 }
+
+// #define AXP2101_I2C_ADDR            (0x35)
+// #define AXP2101_RESET_CFG           (0x17)
+// #define AXP2101_BROM                (0xA1)
+// #define AXP2101_CONFIG              (0xA2)
+// void axp2101_brom_dump()
+// {
+//     if ( !pmu_if.isInitialized )
+//         return;
+
+//     pmu_if.Log(PWR_LOG_LEVEL_INFO, "**************** axp2101_brom_dump ****************");
+
+//     char print_buffer[(sizeof("0x00, ") - 1) * 16 + 1] = {'\0'};
+//     uint8_t reg_17 = 0xff;
+//     uint8_t reg_a2 = 0xff;
+//     uint8_t batt_cal_data[128] = {0xff};
+
+//     pmu_if.Reg.Read(AXP2101_I2C_ADDR, AXP2101_RESET_CFG, &reg_17);
+//     pmu_if.Log(
+//         PWR_LOG_LEVEL_INFO, "AXP2101_RESET_CFG 0x%02X = " BYTE_TO_BINARY_PATTERN, AXP2101_RESET_CFG,
+//         BYTE_TO_BINARY(reg_17)
+//     );
+//     pmu_if.Reg.Read(AXP2101_I2C_ADDR, AXP2101_CONFIG, &reg_a2);
+//     pmu_if.Log(
+//         PWR_LOG_LEVEL_INFO, "AXP2101_CONFIG 0x%02X = " BYTE_TO_BINARY_PATTERN, AXP2101_CONFIG, BYTE_TO_BINARY(reg_a2)
+//     );
+
+//     // enable BROM access
+//     pmu_if.Reg.ClrBits(AXP2101_I2C_ADDR, AXP2101_CONFIG, (1 << 0));
+//     pmu_if.Reg.SetBits(AXP2101_I2C_ADDR, AXP2101_CONFIG, (1 << 0));
+//     pmu_if.Log(PWR_LOG_LEVEL_INFO, "AXP2101_BROM 0x%02X = ", AXP2101_BROM);
+
+//     const uint8_t bytes_wide = 8;
+//     for ( uint16_t idx = 0; idx < sizeof(batt_cal_data); idx++ )
+//     {
+//         pmu_if.Reg.Read(AXP2101_I2C_ADDR, AXP2101_BROM, &(batt_cal_data[idx]));
+//         // pmu_if.Log(PWR_LOG_LEVEL_INFO, "0x%02X", batt_cal_data[idx]);
+//         if ( (idx + 1) % bytes_wide == 0 )
+//         {
+//             for ( uint16_t idxx = 0; idxx < bytes_wide; idxx++ )
+//             {
+//                 sprintf(
+//                     print_buffer + ((sizeof("0x00, ") - 1) * idxx), "0x%02X, ",
+//                     batt_cal_data[idx - (bytes_wide - 1) + idxx]
+//                 );
+//             }
+//             pmu_if.Log(PWR_LOG_LEVEL_INFO, "BROM Dump 0x%02X: %s", (idx - (bytes_wide - 1)), print_buffer);
+//         }
+//     }
+//     // disable BROM access
+//     pmu_if.Reg.ClrBits(AXP2101_I2C_ADDR, AXP2101_CONFIG, (1 << 0));
+// }
