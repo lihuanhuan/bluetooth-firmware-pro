@@ -43,6 +43,7 @@
 #include "app_fifo.h"
 #include "nrf_drv_uart.h"
 #include "nrf_assert.h"
+#include "nrf_delay.h"
 
 static nrf_drv_uart_t app_uart_inst = NRF_DRV_UART_INSTANCE(APP_UART_DRIVER_INSTANCE);
 
@@ -241,6 +242,22 @@ uint32_t app_uart_put(uint8_t byte)
         }
     }
     return err_code;
+}
+
+uint32_t app_uart_put_data(uint8_t* pdata, uint8_t lenth)
+{
+    uint32_t count = 0;
+    while (nrf_drv_uart_tx_in_progress(&app_uart_inst))
+    {
+        nrf_delay_ms(10);
+        count++;
+    }
+    if (count > 50)
+    {
+        return NRF_ERROR_BUSY;
+    }
+    ret_code_t ret =  nrf_drv_uart_tx(&app_uart_inst, pdata, lenth);
+    return ret;
 }
 
 

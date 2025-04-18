@@ -666,6 +666,11 @@ static void pm_evt_handler(const pm_evt_t* p_evt)
     switch ( p_evt->evt_id )
     {
 
+    case PM_EVT_BONDED_PEER_CONNECTED:
+        NRF_LOG_INFO("%s ---> PM_EVT_BONDED_PEER_CONNECTED", __func__);
+        request_service_changed = true;
+        break;
+
     case PM_EVT_CONN_SEC_CONFIG_REQ:
         NRF_LOG_INFO("%s ---> PM_EVT_CONN_SEC_CONFIG_REQ", __func__);
         {
@@ -729,7 +734,6 @@ static void pm_evt_handler(const pm_evt_t* p_evt)
         break;
     case PM_EVT_LOCAL_DB_CACHE_APPLY_FAILED:
         NRF_LOG_INFO("%s ---> PM_EVT_LOCAL_DB_CACHE_APPLY_FAILED", __func__);
-        request_service_changed = true;
         break;
 
     case PM_EVT_PEER_DATA_UPDATE_SUCCEEDED:
@@ -1894,20 +1898,7 @@ static uint8_t calcXor(uint8_t* buf, uint8_t len)
 }
 static void uart_put_data(uint8_t* pdata, uint8_t lenth)
 {
-    uint32_t err_code;
-
-    while ( lenth-- )
-    {
-        do
-        {
-            err_code = app_uart_put(*pdata++);
-            if ( (err_code != NRF_SUCCESS) && (err_code != NRF_ERROR_BUSY) )
-            {
-                APP_ERROR_CHECK(err_code);
-            }
-        }
-        while ( err_code == NRF_ERROR_BUSY );
-    }
+    app_uart_put_data(pdata, lenth);
 }
 
 static void send_stm_data(uint8_t* pdata, uint8_t lenth)
