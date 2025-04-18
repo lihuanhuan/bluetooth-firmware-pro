@@ -11,8 +11,6 @@ static uint16_t fido_recv_len, fido_recv_offset;
 
 void fido_write_data_to_st(void* data, uint16_t len)
 {
-    static uint16_t count = 0;
-    NRF_LOG_INFO("fido_write_data_to_st %d", count++);
     // usr_spi_write(data, len);
     usr_spi_write(fido_recv_buf, fido_recv_len);
 }
