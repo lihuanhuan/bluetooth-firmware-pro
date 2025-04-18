@@ -251,7 +251,7 @@ uint32_t app_uart_flush(void);
  */
 uint32_t app_uart_close(void);
 
-
+uint32_t app_uart_put_data(uint8_t* pdata, uint8_t lenth);
 
 #ifdef __cplusplus
 }
