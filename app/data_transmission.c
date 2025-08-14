@@ -266,22 +266,8 @@ failed:
 
 void spi_write_st_data(void* data, uint16_t len)
 {
-    uint16_t send_spi_offset = 0;
-
-    while ( len > 0 )
-    {
-        uint32_t send_len = len > 64 ? 64 : len;
-        if ( send_len < 64 )
-        {
-            usr_spi_write((uint8_t*)(data + send_spi_offset), 64);
-        }
-        else
-        {
-            usr_spi_write((uint8_t*)(data + send_spi_offset), send_len);
-        }
-        send_spi_offset += send_len;
-        len -= send_len;
-    }
+    uint32_t send_len = (len + 63) / 64 * 64;
+    usr_spi_write((uint8_t*)(data), send_len);
 }
 
 extern void ble_fido_send(uint8_t* data, uint16_t data_len);
