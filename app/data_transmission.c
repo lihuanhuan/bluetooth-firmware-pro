@@ -294,10 +294,12 @@ void spi_read_st_data(void* data, uint16_t len)
         {
             ble_nus_send(data_recived_buf, data_recived_len);
         }
+#if BLE_FIDO_ENABLED
         else if ( spi_data_type == DATA_TYPE_FIDO )
         {
             ble_fido_send(data_recived_buf, data_recived_len);
         }
+#endif
     }
 }
 

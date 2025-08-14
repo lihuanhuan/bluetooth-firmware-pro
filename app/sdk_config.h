@@ -544,7 +544,7 @@
 // <e> BLE_FIDO_ENABLED - ble_fido - FIDO Service
 //==========================================================
 #ifndef BLE_FIDO_ENABLED
-#define BLE_FIDO_ENABLED 1
+#define BLE_FIDO_ENABLED 0
 #endif
 // <e> BLE_FIDO_CONFIG_LOG_ENABLED - Enables logging in the module.
 //==========================================================

@@ -367,7 +367,9 @@
 
 BLE_NUS_DEF(m_nus, NRF_SDH_BLE_TOTAL_LINK_COUNT); /**< BLE NUS service instance. */
 BLE_BAS_DEF(m_bas);
+#if BLE_FIDO_ENABLED
 BLE_FIDO_DEF(m_fido, NRF_SDH_BLE_TOTAL_LINK_COUNT);
+#endif
 NRF_BLE_GATT_DEF(m_gatt);           /**< GATT module instance. */
 NRF_BLE_QWR_DEF(m_qwr);             /**< Context for the Queued Write module.*/
 BLE_ADVERTISING_DEF(m_advertising); /**< Advertising module instance. */
@@ -408,7 +410,9 @@ static ble_uuid_t m_adv_uuids[] =                        /**< Universally unique
         {BLE_UUID_DEVICE_INFORMATION_SERVICE, BLE_UUID_TYPE_BLE},
 #endif
         {BLE_UUID_BATTERY_SERVICE, BLE_UUID_TYPE_BLE},
+#if BLE_FIDO_ENABLED
         {BLE_UUID_FIDO_SERVICE, BLE_UUID_TYPE_BLE},
+#endif
         {BLE_UUID_NUS_SERVICE, BLE_UUID_TYPE_BLE}};
 
 static volatile uint8_t flag_uart_trans = 1;
@@ -982,7 +986,9 @@ static void nus_data_handler(ble_nus_evt_t* p_evt)
     }
 }
 
+#if BLE_FIDO_ENABLED
 #include "fido.h"
+#endif
 
 /**@brief Function for initializing services that will be used by the application.
  *
@@ -994,7 +1000,6 @@ static void services_init(void)
     nrf_ble_qwr_init_t qwr_init = {0};
     ble_dis_init_t dis_init;
     ble_nus_init_t nus_init;
-    ble_fido_init_t fido_init = {0};
 
     // Initialize Queued Write Module.
     qwr_init.error_handler = nrf_qwr_error_handler;
@@ -1010,7 +1015,9 @@ static void services_init(void)
     memset(&dis_init, 0, sizeof(dis_init));
 
     ble_srv_ascii_to_utf8(&dis_init.manufact_name_str, MANUFACTURER_NAME);
+    #if BLE_FIDO_ENABLED
     ble_srv_ascii_to_utf8(&dis_init.model_num_str, ble_adv_name);
+    #endif
     ble_srv_ascii_to_utf8(&dis_init.serial_num_str, MODEL_NUMBER);
     ble_srv_ascii_to_utf8(&dis_init.hw_rev_str, HW_REVISION);
     ble_srv_ascii_to_utf8(&dis_init.fw_rev_str, FW_REVISION);
@@ -1033,11 +1040,14 @@ static void services_init(void)
     err_code = ble_nus_init(&m_nus, &nus_init);
     APP_ERROR_CHECK(err_code);
 
+#if BLE_FIDO_ENABLED
+    ble_fido_init_t fido_init = {0};
+
     // Initialize FIDO.
-    memset(&fido_init, 0, sizeof(fido_init));
     fido_init.data_handler = fido_data_handler;
     err_code = ble_fido_init(&m_fido, &fido_init);
-    APP_ERROR_CHECK(err_code);    
+    APP_ERROR_CHECK(err_code);
+#endif
 }
 
 /**@brief Function for the Timer initialization.
@@ -1173,24 +1183,27 @@ void send_service_changed(void* p_event_data, uint16_t event_size)
 
     err_code = sd_ble_gatts_initial_user_handle_get(&start_handle);
 
-    if(err_code != NRF_SUCCESS)
+    if ( err_code != NRF_SUCCESS )
     {
-        NRF_LOG_ERROR("sd_ble_gatts_initial_user_handle_get() returned %s which should not happen.",
-                      nrf_strerror_get(err_code));
+        NRF_LOG_ERROR(
+            "sd_ble_gatts_initial_user_handle_get() returned %s which should not happen.", nrf_strerror_get(err_code)
+        );
         return;
     }
 
     NRF_LOG_INFO("m_conn_handle: 0x%04x, start_handle: 0x%04x", m_conn_handle, start_handle);
     err_code = sd_ble_gatts_service_changed(m_conn_handle, start_handle, 0xFFFF);
-    if((err_code == BLE_ERROR_INVALID_CONN_HANDLE) || (err_code == NRF_ERROR_INVALID_STATE) || (err_code == NRF_ERROR_BUSY))
+    if ( (err_code == BLE_ERROR_INVALID_CONN_HANDLE) || (err_code == NRF_ERROR_INVALID_STATE) ||
+         (err_code == NRF_ERROR_BUSY) )
     {
         /* These errors can be expected when trying to send a Service Changed indication */
         /* if the CCCD is not set to indicate. Thus, set the returning error code to success. */
-        NRF_LOG_WARNING("Client did not have the Service Changed indication set to enabled."
-                        "Error: 0x%08x",
-                        err_code);
+        NRF_LOG_WARNING(
+            "Client did not have the Service Changed indication set to enabled."
+            "Error: 0x%08x",
+            err_code
+        );
         err_code = NRF_SUCCESS;
-        
     }
     APP_ERROR_CHECK(err_code);
 }
@@ -1374,7 +1387,7 @@ static void ble_evt_handler(const ble_evt_t* p_ble_evt, void* p_context)
 
     case BLE_GATTS_EVT_SYS_ATTR_MISSING:
     case BLE_GAP_EVT_CONN_SEC_UPDATE:
-        NRF_LOG_INFO("BLE_GAP_EVT_CONN_SEC_UPDATE");        
+        NRF_LOG_INFO("BLE_GAP_EVT_CONN_SEC_UPDATE");
         break;
 
     default:
