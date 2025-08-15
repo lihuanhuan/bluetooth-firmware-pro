@@ -672,7 +672,7 @@ static void pm_evt_handler(const pm_evt_t* p_evt)
 
     case PM_EVT_BONDED_PEER_CONNECTED:
         NRF_LOG_INFO("%s ---> PM_EVT_BONDED_PEER_CONNECTED", __func__);
-        request_service_changed = true;
+        // request_service_changed = true;
         break;
 
     case PM_EVT_CONN_SEC_CONFIG_REQ:
