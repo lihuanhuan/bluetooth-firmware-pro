@@ -544,7 +544,7 @@
 // <e> BLE_FIDO_ENABLED - ble_fido - FIDO Service
 //==========================================================
 #ifndef BLE_FIDO_ENABLED
-#define BLE_FIDO_ENABLED 1
+#define BLE_FIDO_ENABLED 0
 #endif
 // <e> BLE_FIDO_CONFIG_LOG_ENABLED - Enables logging in the module.
 //==========================================================
@@ -9868,7 +9868,7 @@
 // <i> The time set aside for this connection on every connection interval in 1.25 ms units.
 
 #ifndef NRF_SDH_BLE_GAP_EVENT_LENGTH
-#define NRF_SDH_BLE_GAP_EVENT_LENGTH 6
+#define NRF_SDH_BLE_GAP_EVENT_LENGTH 12
 #endif
 
 // <o> NRF_SDH_BLE_GATT_MAX_MTU_SIZE - Static maximum MTU size. 
@@ -9890,7 +9890,7 @@
  
 
 #ifndef NRF_SDH_BLE_SERVICE_CHANGED
-#define NRF_SDH_BLE_SERVICE_CHANGED 1
+#define NRF_SDH_BLE_SERVICE_CHANGED 0
 #endif
 
 // </h> 

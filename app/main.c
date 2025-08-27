@@ -125,6 +125,7 @@
 #define BLE_DISCON              3
 #define BLE_CON                 4
 #define BLE_PAIR                5
+#define BLE_CONN_STATUS         6
 
 #define PWR_DEF                 0
 #define PWR_SHUTDOWN_SYS        1
@@ -163,8 +164,8 @@
 #define BATTERY_LEVEL_MEAS_INTERVAL APP_TIMER_TICKS(1000) /**< Battery level measurement interval (ticks). */
 #define BATTERY_MEAS_LONG_INTERVAL  APP_TIMER_TICKS(5000)
 
-#define MIN_CONN_INTERVAL           MSEC_TO_UNITS(30, UNIT_1_25_MS) /**< Minimum acceptable connection interval (10 ms). */
-#define MAX_CONN_INTERVAL           MSEC_TO_UNITS(30, UNIT_1_25_MS) /**< Maximum acceptable connection interval (100 ms) */
+#define MIN_CONN_INTERVAL           MSEC_TO_UNITS(15, UNIT_1_25_MS) /**< Minimum acceptable connection interval (10 ms). */
+#define MAX_CONN_INTERVAL           MSEC_TO_UNITS(15, UNIT_1_25_MS) /**< Maximum acceptable connection interval (100 ms) */
 #define SLAVE_LATENCY               0                               /**< Slave latency. */
 #define CONN_SUP_TIMEOUT            MSEC_TO_UNITS(300, UNIT_10_MS) /**< Connection supervisory timeout (4 seconds). */
 #define FIRST_CONN_PARAMS_UPDATE_DELAY                                                                    \
@@ -271,6 +272,7 @@
 #define ST_SEND_CLOSE_BLE        0x02
 #define ST_SEND_DISCON_BLE       0x03
 #define ST_GET_BLE_SWITCH_STATUS 0x04
+#define ST_GET_BLE_CONN_STATUS   0x05
 //
 #define ST_CMD_POWER           0x82
 #define ST_SEND_CLOSE_SYS_PWR  0x01
@@ -367,7 +369,9 @@
 
 BLE_NUS_DEF(m_nus, NRF_SDH_BLE_TOTAL_LINK_COUNT); /**< BLE NUS service instance. */
 BLE_BAS_DEF(m_bas);
+#if BLE_FIDO_ENABLED
 BLE_FIDO_DEF(m_fido, NRF_SDH_BLE_TOTAL_LINK_COUNT);
+#endif
 NRF_BLE_GATT_DEF(m_gatt);           /**< GATT module instance. */
 NRF_BLE_QWR_DEF(m_qwr);             /**< Context for the Queued Write module.*/
 BLE_ADVERTISING_DEF(m_advertising); /**< Advertising module instance. */
@@ -408,7 +412,9 @@ static ble_uuid_t m_adv_uuids[] =                        /**< Universally unique
         {BLE_UUID_DEVICE_INFORMATION_SERVICE, BLE_UUID_TYPE_BLE},
 #endif
         {BLE_UUID_BATTERY_SERVICE, BLE_UUID_TYPE_BLE},
+#if BLE_FIDO_ENABLED
         {BLE_UUID_FIDO_SERVICE, BLE_UUID_TYPE_BLE},
+#endif
         {BLE_UUID_NUS_SERVICE, BLE_UUID_TYPE_BLE}};
 
 static volatile uint8_t flag_uart_trans = 1;
@@ -668,7 +674,7 @@ static void pm_evt_handler(const pm_evt_t* p_evt)
 
     case PM_EVT_BONDED_PEER_CONNECTED:
         NRF_LOG_INFO("%s ---> PM_EVT_BONDED_PEER_CONNECTED", __func__);
-        request_service_changed = true;
+        // request_service_changed = true;
         break;
 
     case PM_EVT_CONN_SEC_CONFIG_REQ:
@@ -943,7 +949,7 @@ static void nus_data_handler(ble_nus_evt_t* p_evt)
             if ( nus_data_buf[0] == '?' )
             {
                 pad = (nus_data_len + 63) / 64;
-                if ( nus_data_len - pad > msg_len )
+                if ( nus_data_len - pad >= msg_len )
                 {
                     rcv_head_flag = DATA_INIT;
                     nus_data_len = msg_len + (msg_len + 62) / 63;
@@ -960,8 +966,8 @@ static void nus_data_handler(ble_nus_evt_t* p_evt)
                 rcv_head_flag = DATA_INIT;
             }
         }
-        // spi_write_st_data(nus_data_buf, nus_data_len);
-        app_sched_event_put(nus_data_buf, nus_data_len, spi_write_st_data);
+        spi_write_st_data(nus_data_buf, nus_data_len);
+        // app_sched_event_put(nus_data_buf, nus_data_len, spi_write_st_data);
     }
     else if ( p_evt->type == BLE_NUS_EVT_TX_RDY )
     {
@@ -982,7 +988,9 @@ static void nus_data_handler(ble_nus_evt_t* p_evt)
     }
 }
 
+#if BLE_FIDO_ENABLED
 #include "fido.h"
+#endif
 
 /**@brief Function for initializing services that will be used by the application.
  *
@@ -994,7 +1002,6 @@ static void services_init(void)
     nrf_ble_qwr_init_t qwr_init = {0};
     ble_dis_init_t dis_init;
     ble_nus_init_t nus_init;
-    ble_fido_init_t fido_init = {0};
 
     // Initialize Queued Write Module.
     qwr_init.error_handler = nrf_qwr_error_handler;
@@ -1010,7 +1017,9 @@ static void services_init(void)
     memset(&dis_init, 0, sizeof(dis_init));
 
     ble_srv_ascii_to_utf8(&dis_init.manufact_name_str, MANUFACTURER_NAME);
+    #if BLE_FIDO_ENABLED
     ble_srv_ascii_to_utf8(&dis_init.model_num_str, ble_adv_name);
+    #endif
     ble_srv_ascii_to_utf8(&dis_init.serial_num_str, MODEL_NUMBER);
     ble_srv_ascii_to_utf8(&dis_init.hw_rev_str, HW_REVISION);
     ble_srv_ascii_to_utf8(&dis_init.fw_rev_str, FW_REVISION);
@@ -1033,11 +1042,14 @@ static void services_init(void)
     err_code = ble_nus_init(&m_nus, &nus_init);
     APP_ERROR_CHECK(err_code);
 
+#if BLE_FIDO_ENABLED
+    ble_fido_init_t fido_init = {0};
+
     // Initialize FIDO.
-    memset(&fido_init, 0, sizeof(fido_init));
     fido_init.data_handler = fido_data_handler;
     err_code = ble_fido_init(&m_fido, &fido_init);
-    APP_ERROR_CHECK(err_code);    
+    APP_ERROR_CHECK(err_code);
+#endif
 }
 
 /**@brief Function for the Timer initialization.
@@ -1173,24 +1185,27 @@ void send_service_changed(void* p_event_data, uint16_t event_size)
 
     err_code = sd_ble_gatts_initial_user_handle_get(&start_handle);
 
-    if(err_code != NRF_SUCCESS)
+    if ( err_code != NRF_SUCCESS )
     {
-        NRF_LOG_ERROR("sd_ble_gatts_initial_user_handle_get() returned %s which should not happen.",
-                      nrf_strerror_get(err_code));
+        NRF_LOG_ERROR(
+            "sd_ble_gatts_initial_user_handle_get() returned %s which should not happen.", nrf_strerror_get(err_code)
+        );
         return;
     }
 
     NRF_LOG_INFO("m_conn_handle: 0x%04x, start_handle: 0x%04x", m_conn_handle, start_handle);
     err_code = sd_ble_gatts_service_changed(m_conn_handle, start_handle, 0xFFFF);
-    if((err_code == BLE_ERROR_INVALID_CONN_HANDLE) || (err_code == NRF_ERROR_INVALID_STATE) || (err_code == NRF_ERROR_BUSY))
+    if ( (err_code == BLE_ERROR_INVALID_CONN_HANDLE) || (err_code == NRF_ERROR_INVALID_STATE) ||
+         (err_code == NRF_ERROR_BUSY) )
     {
         /* These errors can be expected when trying to send a Service Changed indication */
         /* if the CCCD is not set to indicate. Thus, set the returning error code to success. */
-        NRF_LOG_WARNING("Client did not have the Service Changed indication set to enabled."
-                        "Error: 0x%08x",
-                        err_code);
+        NRF_LOG_WARNING(
+            "Client did not have the Service Changed indication set to enabled."
+            "Error: 0x%08x",
+            err_code
+        );
         err_code = NRF_SUCCESS;
-        
     }
     APP_ERROR_CHECK(err_code);
 }
@@ -1374,7 +1389,7 @@ static void ble_evt_handler(const ble_evt_t* p_ble_evt, void* p_context)
 
     case BLE_GATTS_EVT_SYS_ATTR_MISSING:
     case BLE_GAP_EVT_CONN_SEC_UPDATE:
-        NRF_LOG_INFO("BLE_GAP_EVT_CONN_SEC_UPDATE");        
+        NRF_LOG_INFO("BLE_GAP_EVT_CONN_SEC_UPDATE");
         break;
 
     default:
@@ -1578,6 +1593,9 @@ void uart_event_handle(app_uart_evt_t* p_event)
                     break;
                 case ST_GET_BLE_SWITCH_STATUS:
                     ble_conn_flag = BLE_CON;
+                    break;
+                case ST_GET_BLE_CONN_STATUS:
+                    ble_conn_flag = BLE_CONN_STATUS;
                     break;
                 default:
                     break;
@@ -1858,8 +1876,8 @@ void in_gpiote_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action)
         }
         else if ( nrf_gpio_pin_read(SLAVE_SPI_RSP_IO) == 0 && !spi_dir_out )
         {
-            // spi_read_st_data(NULL, 0);
-            app_sched_event_put(NULL, 0, spi_read_st_data);
+            spi_read_st_data(NULL, 0);
+            // app_sched_event_put(NULL, 0, spi_read_st_data);
         }
         break;
     default:
@@ -2142,11 +2160,18 @@ static void ble_ctl_process(void* p_event_data, uint16_t event_size)
 
         bt_disconnect();
     }
-    if ( BLE_CON == ble_conn_flag )
+    else if ( BLE_CON == ble_conn_flag )
     {
         ble_conn_flag = BLE_DEF;
         bak_buff[0] = BLE_CMD_CON_STA;
         bak_buff[1] = ble_status_flag + 2;
+        send_stm_data(bak_buff, 2);
+    }
+    else if ( BLE_CONN_STATUS == ble_conn_flag )
+    {
+        ble_conn_flag = BLE_DEF;
+        bak_buff[0] = BLE_CMD_CON_STA;
+        bak_buff[1] = m_conn_handle == BLE_CONN_HANDLE_INVALID ? BLE_DISCON_STATUS : BLE_CON_STATUS;
         send_stm_data(bak_buff, 2);
     }
 
