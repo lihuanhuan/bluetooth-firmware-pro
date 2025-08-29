@@ -1916,7 +1916,20 @@ static uint8_t calcXor(uint8_t* buf, uint8_t len)
 }
 static void uart_put_data(uint8_t* pdata, uint8_t lenth)
 {
-    app_uart_put_data(pdata, lenth);
+    uint32_t err_code;
+
+    while ( lenth-- )
+    {
+        do
+        {
+            err_code = app_uart_put(*pdata++);
+            if ( (err_code != NRF_SUCCESS) && (err_code != NRF_ERROR_BUSY) )
+            {
+                APP_ERROR_CHECK(err_code);
+            }
+        }
+        while ( err_code == NRF_ERROR_BUSY );
+    }
 }
 
 static void send_stm_data(uint8_t* pdata, uint8_t lenth)
