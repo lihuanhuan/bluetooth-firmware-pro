@@ -187,12 +187,12 @@
 
 #define SEC_PARAM_BOND            1 /**< Perform bonding. */
 #define SEC_PARAM_MITM            1 /**< Man In The Middle protection required (applicable when display module is detected). */
-#define SEC_PARAM_LESC            1                            /**< LE Secure Connections enabled. */
-#define SEC_PARAM_KEYPRESS        0                            /**< Keypress notifications not enabled. */
-#define SEC_PARAM_IO_CAPABILITIES BLE_GAP_IO_CAPS_DISPLAY_ONLY /**< Display I/O capabilities. */
-#define SEC_PARAM_OOB             0                            /**< Out Of Band data not available. */
-#define SEC_PARAM_MIN_KEY_SIZE    7                            /**< Minimum encryption key size. */
-#define SEC_PARAM_MAX_KEY_SIZE    16                           /**< Maximum encryption key size. */
+#define SEC_PARAM_LESC            1                             /**< LE Secure Connections enabled. */
+#define SEC_PARAM_KEYPRESS        0                             /**< Keypress notifications not enabled. */
+#define SEC_PARAM_IO_CAPABILITIES BLE_GAP_IO_CAPS_DISPLAY_YESNO /**< Display I/O capabilities. */
+#define SEC_PARAM_OOB             0                             /**< Out Of Band data not available. */
+#define SEC_PARAM_MIN_KEY_SIZE    7                             /**< Minimum encryption key size. */
+#define SEC_PARAM_MAX_KEY_SIZE    16                            /**< Maximum encryption key size. */
 
 #define PASSKEY_LENGTH            6 /**< Length of pass-key received by the stack for display. */
 #define HEAD_NAME_LENGTH          4
@@ -273,6 +273,8 @@
 #define ST_SEND_DISCON_BLE       0x03
 #define ST_GET_BLE_SWITCH_STATUS 0x04
 #define ST_GET_BLE_CONN_STATUS   0x05
+#define ST_SEND_PASSKEY_ACCEPT   0x06
+#define ST_SEND_PASSKEY_REJECT   0x07
 //
 #define ST_CMD_POWER           0x82
 #define ST_SEND_CLOSE_SYS_PWR  0x01
@@ -431,6 +433,8 @@ static void idle_state_handle(void);
 static uint8_t bond_check_key_flag = INIT_VALUE;
 static uint8_t rcv_head_flag = 0;
 static uint8_t ble_status_flag = 0;
+static uint8_t pending_passkey[PASSKEY_LENGTH] = {0};
+static bool waiting_passkey_response = false;
 
 static volatile uint16_t ble_nus_send_len = 0, ble_nus_send_offset = 0;
 static uint8_t* ble_nus_send_buf;
@@ -989,7 +993,7 @@ static void nus_data_handler(ble_nus_evt_t* p_evt)
 }
 
 #if BLE_FIDO_ENABLED
-#include "fido.h"
+  #include "fido.h"
 #endif
 
 /**@brief Function for initializing services that will be used by the application.
@@ -1017,9 +1021,9 @@ static void services_init(void)
     memset(&dis_init, 0, sizeof(dis_init));
 
     ble_srv_ascii_to_utf8(&dis_init.manufact_name_str, MANUFACTURER_NAME);
-    #if BLE_FIDO_ENABLED
+  #if BLE_FIDO_ENABLED
     ble_srv_ascii_to_utf8(&dis_init.model_num_str, ble_adv_name);
-    #endif
+  #endif
     ble_srv_ascii_to_utf8(&dis_init.serial_num_str, MODEL_NUMBER);
     ble_srv_ascii_to_utf8(&dis_init.hw_rev_str, HW_REVISION);
     ble_srv_ascii_to_utf8(&dis_init.fw_rev_str, FW_REVISION);
@@ -1280,6 +1284,10 @@ static void ble_evt_handler(const ble_evt_t* p_ble_evt, void* p_context)
             char passkey[PASSKEY_LENGTH + 1];
             memcpy(passkey, p_ble_evt->evt.gap_evt.params.passkey_display.passkey, PASSKEY_LENGTH);
             passkey[PASSKEY_LENGTH] = 0;
+
+            // Save passkey and set waiting flag
+            memcpy(pending_passkey, passkey, PASSKEY_LENGTH);
+            waiting_passkey_response = true;
 
             ble_conn_nopair_flag = BLE_PAIR;
             bak_buff[0] = BLE_CMD_PAIR_CODE;
@@ -1596,6 +1604,52 @@ void uart_event_handle(app_uart_evt_t* p_event)
                     break;
                 case ST_GET_BLE_CONN_STATUS:
                     ble_conn_flag = BLE_CONN_STATUS;
+                    break;
+                case ST_SEND_PASSKEY_ACCEPT:
+                    if ( waiting_passkey_response && m_conn_handle != BLE_CONN_HANDLE_INVALID )
+                    {
+                        ret_code_t err_code = NRF_SUCCESS;
+                        bool passkey_provided = (lenth == PASSKEY_LENGTH + 3); // 1(cmd)+1(subcmd)+passkey+1(xor)
+
+                        if ( passkey_provided )
+                        {
+                            if ( memcmp(pending_passkey, uart_data_array + 6, PASSKEY_LENGTH) == 0 )
+                            {
+                                // Passkey matches, accept pairing with actual passkey data
+                                err_code =
+                                    sd_ble_gap_auth_key_reply(m_conn_handle, BLE_GAP_AUTH_KEY_TYPE_PASSKEY, NULL);
+                            }
+                            else
+                            {
+                                // Passkey mismatch, reject pairing
+                                err_code = sd_ble_gap_auth_key_reply(m_conn_handle, BLE_GAP_AUTH_KEY_TYPE_NONE, NULL);
+                                APP_ERROR_CHECK(err_code);
+                                // Disconnect to ensure phone exits pairing screen
+                                err_code =
+                                    sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+                                APP_ERROR_CHECK(err_code);
+                            }
+                        }
+                        else
+                        {
+                            err_code = sd_ble_gap_auth_key_reply(m_conn_handle, BLE_GAP_AUTH_KEY_TYPE_NONE, NULL);
+                            APP_ERROR_CHECK(err_code);
+                            err_code = sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+                            APP_ERROR_CHECK(err_code);
+                        }
+                        APP_ERROR_CHECK(err_code);
+                        waiting_passkey_response = false;
+                    }
+                    break;
+                case ST_SEND_PASSKEY_REJECT:
+                    if ( waiting_passkey_response && m_conn_handle != BLE_CONN_HANDLE_INVALID )
+                    {
+                        ret_code_t err_code =
+                            sd_ble_gap_auth_key_reply(m_conn_handle, BLE_GAP_AUTH_KEY_TYPE_NONE, NULL);
+                        err_code = sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+                        APP_ERROR_CHECK(err_code);
+                        waiting_passkey_response = false;
+                    }
                     break;
                 default:
                     break;
