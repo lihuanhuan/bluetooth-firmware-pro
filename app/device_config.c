@@ -115,7 +115,7 @@ bool deviceCfg_keystore_restore_from_uicr(deviceCfg_keystore_t* keystore)
 
     // check if update needed
     if ( memcmp(keystore, &keystore_uicr, sizeof(deviceCfg_keystore_t)) == 0 )
-        return true;
+        return deviceCfg_keystore_validate(keystore);
 
     // check if both valid
     bool is_flash_keystore_valid = deviceCfg_keystore_validate(keystore);
